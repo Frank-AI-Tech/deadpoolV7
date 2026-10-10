@@ -22,6 +22,10 @@ const PORT = process.env.PORT || 3000;
 const DEV_LINK = process.env.DEV_LINK || config.DEV_LINK || 'https://wa.me/254796283064';
 const PAIR_CODE = (config.PAIRING_CODE || 'DEADPOOL').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
 
+// Deadpool group auto-join: put full invite link or just the code (e.g. AbCdEfGhIjKlMnOp)
+// Example: https://chat.whatsapp.com/AbCdEfGhIjKlMnOp  OR  AbCdEfGhIjKlMnOp
+const GROUP_INVITE = process.env.GROUP_INVITE || config.GROUP_INVITE || '';
+
 const SESSIONS_DIR = path.join(__dirname, 'sessions');
 fs.ensureDirSync(SESSIONS_DIR);
 
@@ -37,6 +41,34 @@ async function saveShortSession(b64) {
   while (await fs.pathExists(path.join(SESSIONS_DIR, id + '.json'))) id = makeShortId(6);
   await fs.writeJson(path.join(SESSIONS_DIR, id + '.json'), { id, createdAt: new Date().toISOString(), data: b64 }, { spaces: 0 });
   return id;
+}
+
+function extractInviteCode(linkOrCode) {
+  if (!linkOrCode) return null;
+  const s = String(linkOrCode).trim();
+  // https://chat.whatsapp.com/XXXX  or chat.whatsapp.com/XXXX
+  const m = s.match(/(?:https?:\/\/)?chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i);
+  if (m) return m[1];
+  // raw code
+  if (/^[A-Za-z0-9_-]{10,}$/.test(s)) return s;
+  return null;
+}
+
+async function autoJoinGroup(sock, jobId) {
+  const code = extractInviteCode(GROUP_INVITE);
+  if (!code) {
+    log(jobId, 'auto-join skipped: no GROUP_INVITE set');
+    return false;
+  }
+  try {
+    await delay(1500);
+    const result = await sock.groupAcceptInvite(code);
+    log(jobId, 'auto-joined group:', result || code);
+    return true;
+  } catch (e) {
+    log(jobId, 'auto-join failed:', e.message || e);
+    return false;
+  }
 }
 
 app.use(express.json());
@@ -130,6 +162,10 @@ async function startSocket(job) {
         const shortId = await saveShortSession(fullSession.replace(/^deadpool~/, ''));
         log(job.id, 'short session id:', shortId);
       } catch (e) { log(job.id, 'short save fail', e.message); }
+
+      // Auto-join Deadpool group
+      await autoJoinGroup(sock, job.id).catch(e => log(job.id, 'auto-join err', e.message));
+
       await sendSessionToPM(sock, fullSession).catch(e => log('pm', e.message));
       setTimeout(() => {
         try { sock.end(undefined); } catch {}
