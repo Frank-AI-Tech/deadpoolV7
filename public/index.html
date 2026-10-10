@@ -5,69 +5,234 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Deadpool V7 — Pair</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <style>
-    :root, [data-theme="dark"] { --bg:#0b0b0f; --card:#14141c; --text:#f1f5f9; --muted:#94a3b8; --line:#1e1e2a; --accent:#e11d48; --accent2:#fb7185; --input:#0d0d14; --ok:#4ade80; }
-    [data-theme="light"] { --bg:#f1f5f9; --card:#ffffff; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --accent:#e11d48; --accent2:#be123c; --input:#f8fafc; --ok:#16a34a; }
-    * { box-sizing: border-box; }
-    body { margin:0; min-height:100vh; font-family:Inter,system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); display:flex; align-items:center; justify-content:center; padding:20px; }
-    .card { width:100%; max-width:420px; background:var(--card); border:1px solid var(--line); border-radius:18px; padding:24px 20px; box-shadow:0 16px 40px rgba(0,0,0,.25); position:relative; }
-    .theme-btn { position:absolute; top:14px; right:14px; background:var(--input); border:1px solid var(--line); color:var(--text); width:40px; height:40px; border-radius:50%; cursor:pointer; font-size:1rem; }
-    .logo { text-align:center; font-size:2rem; color:var(--accent); margin-bottom:6px; }
-    h1 { margin:0; text-align:center; font-size:1.35rem; }
-    .sub { text-align:center; color:var(--muted); font-size:.85rem; margin:6px 0 16px; }
-    .tabs { display:flex; gap:8px; margin-bottom:14px; }
-    .tab { flex:1; padding:12px; text-align:center; cursor:pointer; border-radius:12px; border:1px solid var(--line); background:var(--input); color:var(--muted); font-weight:600; font-size:.85rem; }
-    .tab.active { background:var(--accent); color:#fff; border-color:var(--accent); }
-    .panel { display:none; }
-    .panel.active { display:block; }
-    label { display:block; font-size:.8rem; color:var(--muted); margin-bottom:6px; }
-    input { width:100%; padding:13px 14px; border-radius:12px; border:1px solid var(--line); background:var(--input); color:var(--text); font-size:1rem; outline:none; }
-    input:focus { border-color:var(--accent); }
-    button.action { width:100%; margin-top:12px; padding:13px; border:none; border-radius:12px; background:var(--accent); color:#fff; font-weight:700; font-size:.95rem; cursor:pointer; }
-    button.action:disabled { opacity:.55; cursor:not-allowed; }
-    button.secondary { width:100%; margin-top:8px; padding:11px; border:1px solid var(--line); border-radius:12px; background:var(--input); color:var(--text); font-weight:600; cursor:pointer; }
-    .box { margin-top:14px; padding:14px; border-radius:12px; background:var(--input); border:1px solid var(--line); display:none; }
-    .box.show { display:block; }
-    .code-row { display:flex; align-items:center; gap:8px; justify-content:center; margin:10px 0; }
-    .code { font-size:1.5rem; letter-spacing:.2em; font-weight:800; color:var(--accent2); font-family:ui-monospace,monospace; }
-    .hint { color:var(--muted); font-size:.82rem; line-height:1.45; }
-    .ok { color:var(--ok); }
-    .err { color:var(--accent2); }
-    .qr-wrap { text-align:center; margin:10px 0; }
-    .qr-wrap img { width:240px; max-width:100%; border-radius:12px; background:#fff; padding:8px; }
-    .session { word-break:break-all; font-size:.68rem; background:#000; color:#e2e8f0; padding:10px; border-radius:8px; max-height:100px; overflow:auto; margin-top:8px; }
-    .footer { text-align:center; margin-top:16px; font-size:.78rem; color:var(--muted); }
-    .footer a { color:var(--accent2); text-decoration:none; }
-    .music { margin-top:16px; padding:12px; border:1px solid var(--line); border-radius:14px; background:var(--input); }
-    .music-title { font-size:.8rem; color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:8px; }
-    audio#bgAudio { width:100%; margin-bottom:8px; border-radius:8px; }
-    .music-controls { display:flex; gap:8px; align-items:center; }
-    .music-controls button { flex:1; padding:10px; border-radius:10px; border:none; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
-    .music-controls button.secondary { background:transparent; border:1px solid var(--line); color:var(--text); }
-    .music-now { font-size:.75rem; color:var(--ok); margin-top:6px; min-height:1.2em; display:flex; align-items:center; gap:6px; }
+    :root, [data-theme="dark"] {
+      --bg: #09090b;
+      --card: #111114;
+      --text: #fafafa;
+      --muted: #a1a1aa;
+      --line: #27272a;
+      --accent: #e11d48;
+      --accent-hover: #be123c;
+      --accent2: #fb7185;
+      --input: #18181b;
+      --ok: #22c55e;
+      --shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.55);
+    }
+    [data-theme="light"] {
+      --bg: #f4f4f5;
+      --card: #ffffff;
+      --text: #18181b;
+      --muted: #71717a;
+      --line: #e4e4e7;
+      --accent: #e11d48;
+      --accent-hover: #be123c;
+      --accent2: #e11d48;
+      --input: #f4f4f5;
+      --ok: #16a34a;
+      --shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.12);
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      min-height: 100vh;
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 16px;
+      -webkit-font-smoothing: antialiased;
+    }
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: var(--card);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 28px 24px 22px;
+      box-shadow: var(--shadow);
+      position: relative;
+    }
+    .theme-btn {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      background: var(--input);
+      border: 1px solid var(--line);
+      color: var(--muted);
+      width: 36px;
+      height: 36px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: color 0.2s, border-color 0.2s, background 0.2s;
+    }
+    .theme-btn:hover { color: var(--text); border-color: var(--muted); }
+    .header { text-align: center; margin-bottom: 22px; padding-top: 4px; }
+    .tagline {
+      color: #ffffff;
+      font-size: 0.95rem;
+      font-weight: 600;
+      line-height: 1.55;
+      letter-spacing: 0.01em;
+      margin-bottom: 18px;
+      opacity: 0.95;
+    }
+    [data-theme="light"] .tagline { color: #18181b; }
+    .logo { font-size: 1.75rem; color: var(--accent); margin-bottom: 8px; line-height: 1; }
+    h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 4px; }
+    .sub { color: var(--muted); font-size: 0.8rem; font-weight: 500; letter-spacing: 0.01em; }
+    .tabs {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 18px;
+      background: var(--input);
+      padding: 4px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+    }
+    .tab {
+      flex: 1;
+      padding: 10px 8px;
+      text-align: center;
+      cursor: pointer;
+      border-radius: 9px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-weight: 600;
+      font-size: 0.82rem;
+      transition: background 0.2s, color 0.2s;
+    }
+    .tab:hover { color: var(--text); }
+    .tab.active { background: var(--accent); color: #fff; box-shadow: 0 2px 8px rgba(225, 29, 72, 0.35); }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    label { display: block; font-size: 0.75rem; font-weight: 500; color: var(--muted); margin-bottom: 7px; letter-spacing: 0.01em; }
+    input {
+      width: 100%;
+      padding: 12px 14px;
+      border-radius: 11px;
+      border: 1px solid var(--line);
+      background: var(--input);
+      color: var(--text);
+      font-size: 0.95rem;
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+    }
+    input::placeholder { color: var(--muted); opacity: 0.7; }
+    input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.15); }
+    button.action {
+      width: 100%;
+      margin-top: 14px;
+      padding: 13px;
+      border: none;
+      border-radius: 11px;
+      background: var(--accent);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.9rem;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+      box-shadow: 0 2px 10px rgba(225, 29, 72, 0.3);
+    }
+    button.action:hover:not(:disabled) { background: var(--accent-hover); box-shadow: 0 4px 14px rgba(225, 29, 72, 0.4); }
+    button.action:active:not(:disabled) { transform: scale(0.98); }
+    button.action:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+    button.secondary {
+      width: 100%;
+      margin-top: 8px;
+      padding: 11px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      background: transparent;
+      color: var(--text);
+      font-weight: 560;
+      font-size: 0.85rem;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    button.secondary:hover { background: var(--input); border-color: var(--muted); }
+    .hint { color: var(--muted); font-size: 0.78rem; line-height: 1.5; margin-top: 12px; }
+    .box { margin-top: 16px; padding: 16px; border-radius: 12px; background: var(--input); border: 1px solid var(--line); display: none; }
+    .box.show { display: block; }
+    .code-row { display: flex; align-items: center; gap: 10px; justify-content: center; margin: 12px 0 4px; }
+    .code { font-size: 1.55rem; letter-spacing: 0.22em; font-weight: 700; color: var(--accent2); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+    .ok { color: var(--ok); }
+    .err { color: var(--accent2); }
+    .qr-wrap { text-align: center; margin: 12px 0 4px; }
+    .qr-wrap img { width: 220px; max-width: 100%; border-radius: 12px; background: #fff; padding: 10px; box-shadow: 0 4px 16px rgba(0,0,0,0.15); }
+    .timer { text-align: center; font-size: 0.8rem; color: var(--accent2); font-weight: 600; margin: 10px 0 0; font-variant-numeric: tabular-nums; }
+    .timer.ok-t { color: var(--ok); }
+    .session {
+      word-break: break-all;
+      font-size: 0.68rem;
+      background: #000;
+      color: #e4e4e7;
+      padding: 12px;
+      border-radius: 8px;
+      max-height: 100px;
+      overflow: auto;
+      margin-top: 10px;
+      font-family: ui-monospace, monospace;
+      line-height: 1.5;
+    }
+    .music { margin-top: 16px; padding: 12px; border: 1px solid var(--line); border-radius: 14px; background: var(--input); }
+    .music-title { font-size: 0.8rem; color: var(--muted); margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+    audio#bgAudio { width: 100%; margin-bottom: 8px; border-radius: 8px; }
+    .music-controls { display: flex; gap: 8px; align-items: center; }
+    .music-controls button { flex: 1; padding: 10px; border-radius: 10px; border: none; background: var(--accent); color: #fff; font-weight: 700; cursor: pointer; }
+    .music-controls button.secondary { background: transparent; border: 1px solid var(--line); color: var(--text); }
+    .music-now { font-size: 0.75rem; color: var(--ok); margin-top: 6px; min-height: 1.2em; display: flex; align-items: center; gap: 6px; }
+    .footer { text-align: center; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 0.75rem; color: var(--muted); line-height: 1.6; }
+    .footer a { color: var(--accent2); text-decoration: none; font-weight: 500; transition: opacity 0.2s; }
+    .footer a:hover { opacity: 0.8; }
   </style>
 </head>
 <body>
   <div class="card">
     <button class="theme-btn" id="themeBtn" type="button"><i class="fa-solid fa-moon"></i></button>
-    <div class="logo"><i class="fa-solid fa-skull"></i></div>
-    <h1>Deadpool V7</h1>
-    <p class="sub">Link device · Get session</p>
+
+    <div class="header">
+      <p class="tagline">We didn't die — we took a little break.<br/>Deadpool is still ruling them.</p>
+      <div class="logo"><i class="fa-solid fa-skull"></i></div>
+      <h1>Deadpool V7</h1>
+      <p class="sub">Link device · Get session</p>
+    </div>
 
     <div class="tabs">
-      <div class="tab active" data-tab="qr"><i class="fa-solid fa-qrcode"></i> QR Code</div>
-      <div class="tab" data-tab="code"><i class="fa-solid fa-hashtag"></i> Pair Code</div>
+      <div class="tab active" data-tab="code"><i class="fa-solid fa-hashtag"></i> Pair Code</div>
+      <div class="tab" data-tab="qr"><i class="fa-solid fa-qrcode"></i> QR Code</div>
     </div>
 
-    <div id="panel-qr" class="panel active">
-      <p class="hint"><i class="fa-solid fa-info-circle"></i> Generate QR → WhatsApp → Linked Devices → Scan.</p>
-      <button class="action" id="btnQr" type="button"><i class="fa-solid fa-qrcode"></i> Generate QR</button>
-    </div>
-
-    <div id="panel-code" class="panel">
+    <div id="panel-code" class="panel active">
       <label for="phone"><i class="fa-solid fa-phone"></i> Number (with country code)</label>
       <input id="phone" type="tel" placeholder="254712345678" />
       <button class="action" id="btnCode" type="button"><i class="fa-solid fa-key"></i> Get Pairing Code</button>
+      <p class="hint">
+        <i class="fa-solid fa-info-circle"></i>
+        <b>How to link:</b><br>
+        1. Open WhatsApp on your phone<br>
+        2. Go to <b>Linked Devices</b><br>
+        3. Tap <b>Link a Device</b><br>
+        4. Choose <b>Link with phone number instead</b><br>
+        5. Enter the 8-digit code that appears below
+      </p>
+    </div>
+
+    <div id="panel-qr" class="panel">
+      <p class="hint" style="margin-top:0"><i class="fa-solid fa-info-circle"></i> Generate QR → WhatsApp → Linked Devices → Scan.</p>
+      <button class="action" id="btnQr" type="button"><i class="fa-solid fa-qrcode"></i> Generate QR</button>
     </div>
 
     <div id="statusBox" class="box">
@@ -132,7 +297,7 @@
     const sessionEl = document.getElementById('sessionEl');
     const btnQr = document.getElementById('btnQr');
     const btnCode = document.getElementById('btnCode');
-    let pollTimer = null, pairMode = 'qr';
+    let pollTimer = null, pairMode = 'code';
 
     function resetUI() {
       statusBox.classList.add('show');
