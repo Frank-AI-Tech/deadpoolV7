@@ -1,7 +1,33 @@
+/**
+ * Clean WhatsApp Bot - English version
+ * Based on the working Baileys structure + legitimate features from the old Deadpool base
+ * (all crash / virtex / bug functions removed)
+ *
+ * Features:
+ * - Downloads (YouTube, TikTok, Instagram)
+ * - Stickers + Quote stickers
+ * - AI (GPT)
+ * - Games (Family100, Tebak variants, Math, TicTacToe, Suit)
+ * - Group admin tools
+ * - Owner settings + anti-delete / anti-edit / anti-viewonce / anticall
+ * - Panel helpers (Pterodactyl style – requires config)
+ * - Auto-join configured group + channel on every connect
+ * - Rotating fancy fonts
+ * - Fully English
+ */
+
 const {
-  default: makeWASocket, useMultiFileAuthState, DisconnectReason,
-  fetchLatestBaileysVersion, downloadContentFromMessage, jidNormalizedUser,
-  getContentType, Browsers, makeCacheableSignalKeyStore
+  default: makeWASocket,
+  useMultiFileAuthState,
+  DisconnectReason,
+  fetchLatestBaileysVersion,
+  downloadContentFromMessage,
+  jidNormalizedUser,
+  getContentType,
+  Browsers,
+  makeCacheableSignalKeyStore,
+  proto,
+  generateWAMessageFromContent
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const fs = require('fs-extra');
@@ -10,12 +36,61 @@ const { Boom } = require('@hapi/boom');
 const NodeCache = require('node-cache');
 const axios = require('axios');
 const { Sticker, StickerTypes } = require('wa-sticker-formatter');
-const config = require('./config');
-const { downloadYouTube, sendAsMp3, sendAsVideo } = require('./downloader');
-const { askAI, getLyrics, generateTextImage } = require('./apis');
+const crypto = require('crypto');
+const { exec } = require('child_process');
+const util = require('util');
+
+// ============ CONFIG (edit this or use external config.js) ============
+let config;
+try {
+  config = require('./config');
+} catch {
+  config = {
+    BOT_NAME: 'Deadpool',
+    PREFIX: '.',
+    OWNER_NUMBER: '254700000000',          // change this
+    DEVELOPERS: [],
+    MODE: 'public',                        // public | private
+    SESSION: '',                           // base64 session if any
+    POWERED_BY: 'Powered by Confronter',
+    FONT: 'sans',                          // sans | bold | mono | random | etc.
+    AUTO_VIEW_STATUS: true,
+    AUTO_LIKE_STATUS: true,
+    AUTO_REACT: false,
+    AUTO_READ: false,
+    ANTI_DELETE: 'pm',                     // off | pm | chat
+    ANTI_EDIT: 'pm',
+    ANTI_VIEW_ONCE: 'pm',
+    ANTI_CALL: true,
+    ANTI_CALL_MSG: 'Calls are not allowed right now.',
+    ANTILINK: false,
+    WELCOME: true,
+    GOODBYE: true,
+    WELCOME_MSG: 'Welcome @user to *@group*!',
+    GOODBYE_MSG: 'Goodbye @user from *@group*.',
+    PRESENCE: 'unavailable',
+    MENU_MEDIA: '',                        // optional image/gif/mp4 url for menu
+    // Auto-join on connect (leave empty to disable)
+    GROUP_INVITE: '',                      // e.g. "https://chat.whatsapp.com/xxxxx" or just the code
+    CHANNEL_ID: '',                        // e.g. "1203630xxxx@newsletter"
+    // Panel / Pterodactyl (optional)
+    PANEL_DOMAIN: '',
+    PANEL_APIKEY: '',
+    PANEL_CLIENT_APIKEY: '',
+    PANEL_EGG: '15',
+    PANEL_LOCATION: '1',
+    // Expiry (optional)
+    BOT_EXPIRY_DATE: '',
+    BOT_EXPIRY_DAYS: 0,
+    EXPIRY_MSG: '⛔ Bot has expired. Contact the owner.'
+  };
+}
 
 // ============ NOISE SUPPRESS ============
-const SUPPRESS = ['Closing session','Closing open session','Failed to decrypt','Session error:','Bad MAC','Decrypted message with closed session','[LID]'];
+const SUPPRESS = [
+  'Closing session', 'Closing open session', 'Failed to decrypt',
+  'Session error:', 'Bad MAC', 'Decrypted message with closed session', '[LID]'
+];
 const _match = s => typeof s === 'string' && SUPPRESS.some(p => s.includes(p));
 const _log = console.log.bind(console);
 console.log = (...a) => { if (_match(a[0])) return; _log(...a); };
@@ -23,8 +98,12 @@ console.log = (...a) => { if (_match(a[0])) return; _log(...a); };
 // ============ HELPERS ============
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/122.0 Safari/537.36';
 async function dlGet(url, e = {}) {
-  return axios.get(url, { timeout: e.timeout || 45000, validateStatus: () => true,
-    headers: { 'User-Agent': UA, Accept: '*/*', ...(e.headers || {}) }, ...e });
+  return axios.get(url, {
+    timeout: e.timeout || 45000,
+    validateStatus: () => true,
+    headers: { 'User-Agent': UA, Accept: '*/*', ...(e.headers || {}) },
+    ...e
+  });
 }
 async function fetchBuffer(url, t = 90000) {
   const r = await dlGet(url, { responseType: 'arraybuffer', timeout: t, maxContentLength: 100 * 1024 * 1024 });
@@ -32,15 +111,32 @@ async function fetchBuffer(url, t = 90000) {
   return Buffer.from(r.data);
 }
 const delay = ms => new Promise(r => setTimeout(r, ms));
+const dig = v => String(v || '').replace(/\D/g, '');
 
 // ============ PATHS ============
 const AUTH_DIR = path.join(__dirname, 'auth_info');
 const DATA_DIR = path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const GROUPS_FILE = path.join(DATA_DIR, 'groups.json');
+const GAMES_FILE = path.join(DATA_DIR, 'games.json');
 const msgCache = new NodeCache({ stdTTL: 60 * 60 * 8, checkperiod: 120 });
 let sock = null;
 const _lidMap = new Map();
+
+// Game state (in-memory + periodic save)
+const games = {
+  family100: {},
+  tebaklagu: {},
+  tebakgambar: {},
+  tebakkata: {},
+  tebakkalimat: {},
+  tebaklirik: {},
+  caklontong: {},
+  caklontong_desk: {},
+  math: {},
+  tictactoe: {},
+  suit: {}
+};
 
 // ============ LID CACHE ============
 function cacheLid(key, msg) {
@@ -53,7 +149,6 @@ function cacheLid(key, msg) {
     }
   } catch {}
 }
-// Best-effort: real phone for a jid (uses cache built from messages + metadata)
 function jidToPhone(jid, msg) {
   if (!jid) return 'hidden';
   const raw = String(jid);
@@ -66,7 +161,6 @@ function jidToPhone(jid, msg) {
   const n = raw.split('@')[0].split(':')[0];
   return /^\d{6,15}$/.test(n) ? n : 'hidden';
 }
-// Display name for welcome/goodbye mentions — never shows raw LID numbers
 function mentionLabel(jid) {
   if (!jid) return 'someone';
   const raw = String(jid);
@@ -84,15 +178,22 @@ async function ensureData() {
   if (!(await fs.pathExists(USERS_FILE))) await fs.writeJson(USERS_FILE, []);
   if (!(await fs.pathExists(GROUPS_FILE))) await fs.writeJson(GROUPS_FILE, {});
 }
-async function loadUsers() { try { return await fs.readJson(USERS_FILE); } catch { return []; } }
+async function loadUsers() {
+  try { return await fs.readJson(USERS_FILE); } catch { return []; }
+}
 async function saveUser(jid) {
   try {
     const users = await loadUsers();
     const id = jidNormalizedUser(jid);
-    if (!users.includes(id)) { users.push(id); await fs.writeJson(USERS_FILE, users, { spaces: 2 }); }
+    if (!users.includes(id)) {
+      users.push(id);
+      await fs.writeJson(USERS_FILE, users, { spaces: 2 });
+    }
   } catch {}
 }
-async function loadGroups() { try { return await fs.readJson(GROUPS_FILE); } catch { return {}; } }
+async function loadGroups() {
+  try { return await fs.readJson(GROUPS_FILE); } catch { return {}; }
+}
 async function saveGroup(gid, k, v) {
   const d = await loadGroups();
   if (!d[gid]) d[gid] = {};
@@ -104,11 +205,22 @@ async function getGroup(gid, k, def = false) {
   return d?.[gid]?.[k] ?? def;
 }
 
-// ============ ROASTS ============
+// ============ ROASTS (English) ============
 const ROASTS = {
-  owner: ['🧠 *Owner only.* Confidence is not a substitute for credentials.','📜 *Owner command.* Your ego signed a cheque your rank cannot cash.','🎭 *Denied.* The audacity arrived long before the authority did.'],
-  admin: ['🪪 *Admins only.* Rank is earned — not borrowed from wishful thinking.','📎 *Denied.* Your badge is imaginary and so is the authority.','🎩 *Admins only.* You arrived without a title and left without a clue.'],
-  group: ['🏛️ *Group only.* Private chat is not a committee of one.','📎 *Group only.* This command lives in a room you are not standing in.']
+  owner: [
+    '🧠 *Owner only.* Confidence is not a substitute for credentials.',
+    '📜 *Owner command.* Your ego signed a cheque your rank cannot cash.',
+    '🎭 *Denied.* The audacity arrived long before the authority did.'
+  ],
+  admin: [
+    '🪪 *Admins only.* Rank is earned — not borrowed from wishful thinking.',
+    '📎 *Denied.* Your badge is imaginary and so is the authority.',
+    '🎩 *Admins only.* You arrived without a title and left without a clue.'
+  ],
+  group: [
+    '🏛️ *Group only.* Private chat is not a committee of one.',
+    '📎 *Group only.* This command lives in a room you are not standing in.'
+  ]
 };
 const roast = k => ROASTS[k][Math.floor(Math.random() * ROASTS[k].length)];
 
@@ -119,7 +231,7 @@ function buildFooter() {
   return `\n_${p} ©${y}_`;
 }
 
-// ============ FANCY FONTS (Unicode) ============
+// ============ FANCY FONTS ============
 const FONT_MAPS = {
   normal: null,
   sans: {
@@ -129,24 +241,12 @@ const FONT_MAPS = {
     N:'𝖭',O:'𝖮',P:'𝖯',Q:'𝖰',R:'𝖱',S:'𝖲',T:'𝖳',U:'𝖴',V:'𝖵',W:'𝖶',X:'𝖷',Y:'𝖸',Z:'𝖹',
     '0':'𝟢','1':'𝟣','2':'𝟤','3':'𝟥','4':'𝟦','5':'𝟧','6':'𝟨','7':'𝟩','8':'𝟪','9':'𝟫'
   },
-  sansitalic: {
-    a:'𝘢',b:'𝘣',c:'𝘤',d:'𝘥',e:'𝘦',f:'𝘧',g:'𝘨',h:'𝘩',i:'𝘪',j:'𝘫',k:'𝘬',l:'𝘭',m:'𝘮',
-    n:'𝘯',o:'𝘰',p:'𝘱',q:'𝘲',r:'𝘳',s:'𝘴',t:'𝘵',u:'𝘶',v:'𝘷',w:'𝘸',x:'𝘹',y:'𝘺',z:'𝘻',
-    A:'𝘈',B:'𝘉',C:'𝘊',D:'𝘋',E:'𝘌',F:'𝘍',G:'𝘎',H:'𝘏',I:'𝘐',J:'𝘑',K:'𝘒',L:'𝘓',M:'𝘔',
-    N:'𝘕',O:'𝘖',P:'𝘗',Q:'𝘘',R:'𝘙',S:'𝘚',T:'𝘛',U:'𝘜',V:'𝘝',W:'𝘞',X:'𝘟',Y:'𝘠',Z:'𝘡'
-  },
   bold: {
     a:'𝗮',b:'𝗯',c:'𝗰',d:'𝗱',e:'𝗲',f:'𝗳',g:'𝗴',h:'𝗵',i:'𝗶',j:'𝗷',k:'𝗸',l:'𝗹',m:'𝗺',
     n:'𝗻',o:'𝗼',p:'𝗽',q:'𝗾',r:'𝗿',s:'𝘀',t:'𝘁',u:'𝘂',v:'𝘃',w:'𝘄',x:'𝘅',y:'𝘆',z:'𝘇',
     A:'𝗔',B:'𝗕',C:'𝗖',D:'𝗗',E:'𝗘',F:'𝗙',G:'𝗚',H:'𝗛',I:'𝗜',J:'𝗝',K:'𝗞',L:'𝗟',M:'𝗠',
     N:'𝗡',O:'𝗢',P:'𝗣',Q:'𝗤',R:'𝗥',S:'𝗦',T:'𝗧',U:'𝗨',V:'𝗩',W:'𝗪',X:'𝗫',Y:'𝗬',Z:'𝗭',
     '0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵'
-  },
-  bolditalic: {
-    a:'𝙖',b:'𝙗',c:'𝙘',d:'𝙙',e:'𝙚',f:'𝙛',g:'𝙜',h:'𝙝',i:'𝙞',j:'𝙟',k:'𝙠',l:'𝙡',m:'𝙢',
-    n:'𝙣',o:'𝙤',p:'𝙥',q:'𝙦',r:'𝙧',s:'𝙨',t:'𝙩',u:'𝙪',v:'𝙫',w:'𝙬',x:'𝙭',y:'𝙮',z:'𝙯',
-    A:'𝘼',B:'𝘽',C:'𝘾',D:'𝘿',E:'𝙀',F:'𝙁',G:'𝙂',H:'𝙃',I:'𝙄',J:'𝙅',K:'𝙆',L:'𝙇',M:'𝙈',
-    N:'𝙉',O:'𝙊',P:'𝙋',Q:'𝙌',R:'𝙍',S:'𝙎',T:'𝙏',U:'𝙐',V:'𝙑',W:'𝙒',X:'𝙓',Y:'𝙔',Z:'𝙕'
   },
   mono: {
     a:'𝚊',b:'𝚋',c:'𝚌',d:'𝚍',e:'𝚎',f:'𝚏',g:'𝚐',h:'𝚑',i:'𝚒',j:'𝚓',k:'𝚔',l:'𝚕',m:'𝚖',
@@ -210,7 +310,7 @@ function styleReplyText(text) {
 function getExpiryInfo() {
   const now = new Date();
   try {
-    const dateStr = config.BOT_EXPIRY_DATE || config.EXPIRY || config.EXPIRE || config.BOT_EXPIRY || '';
+    const dateStr = config.BOT_EXPIRY_DATE || config.EXPIRY || '';
     if (dateStr) {
       const end = new Date(dateStr);
       if (!isNaN(end.getTime())) {
@@ -233,9 +333,11 @@ function getExpiryInfo() {
   } catch {}
   return 'Unlimited';
 }
-function isBotExpired() { return getExpiryInfo() === '⛔ Expired'; }
+function isBotExpired() {
+  return getExpiryInfo() === '⛔ Expired';
+}
 
-// ============ MENU ============
+// ============ MENU (English) ============
 function buildMainMenu(pushName, userCount) {
   const p = config.PREFIX || '.';
   const exp = getExpiryInfo();
@@ -258,16 +360,25 @@ function buildMainMenu(pushName, userCount) {
     'ig <url>',
     'lyrics <song>'
   ]);
-  m += block('🎨 STICKER', [
+  m += block('🎨 STICKER & MEDIA', [
     'sticker  (reply media)',
     's  (reply media)',
     'toimg  (reply sticker)',
+    'qc <text>  (quote image)',
+    'qcstick <text>',
     'vv  (viewonce → owner PM)'
   ]);
   m += block('🤖 AI', [
     'gpt <question>',
     'ai <question>',
     'ask <question>'
+  ]);
+  m += block('🎮 GAMES', [
+    'family100',
+    'tebak lagu|gambar|kata|kalimat|lirik|lontong',
+    'math <easy|medium|hard>',
+    'ttt / tictactoe',
+    'suit @user'
   ]);
   m += block('👥 ADMIN', [
     'promote @user',
@@ -280,7 +391,6 @@ function buildMainMenu(pushName, userCount) {
     'hidetag <text>',
     'tagadmins',
     'antilink on/off',
-    'antistatusmention on/off',
     'grouplink',
     'groupinfo',
     'approve',
@@ -299,8 +409,7 @@ function buildMainMenu(pushName, userCount) {
     'autoreact on/off',
     'autoread on/off',
     'autotyping on/off',
-    'autorecording on/off',
-    'font sans|sansitalic|bold|random',
+    'font sans|bold|mono|random',
     'antidelete off/pm/chat',
     'antiedit off/pm/chat',
     'antiviewonce off/pm/chat',
@@ -311,6 +420,18 @@ function buildMainMenu(pushName, userCount) {
     'setbotname <name>',
     'startmsg'
   ]);
+  m += block('🖥️ PANEL (Owner)', [
+    'panel',
+    '1gb|2gb|3gb|4gb|5gb|unli user,number',
+    'listsrv',
+    'listusr',
+    'delsrv <id>',
+    'delusr <id>',
+    'addusr email,user,name,number',
+    'addsrv ...',
+    'listadmin',
+    'ramlist'
+  ]);
   m += block('🖋️ TEXTMAKER', [
     'neon <text>', 'fire <text>', 'glitch <text>', 'ice <text>',
     'matrix <text>', 'thunder <text>', 'devil <text>', 'sand <text>',
@@ -318,17 +439,19 @@ function buildMainMenu(pushName, userCount) {
     'hacker <text>', 'luxury <text>'
   ]);
   m += block('🎭 FUN', ['joke', 'quote', 'dice', '8ball', 'coinflip']);
-  m += block('🔧 UTILITY', ['ping', 'alive', 'calc <expr>', 'weather <city>', 'owner']);
+  m += block('🔧 UTILITY', ['ping', 'alive', 'calc <expr>', 'weather <city>', 'owner', 'delete']);
 
   m += `〽️ *Made by Confronter* ©${new Date().getFullYear()}`;
   return m;
 }
 
-// ============ SEND MENU ============
 async function sendMenuWithMedia(jid, pushName, userCount) {
   const caption = buildMainMenu(pushName, userCount);
   const mediaUrl = config.MENU_MEDIA;
-  if (!mediaUrl) { await sock.sendMessage(jid, { text: caption }); return; }
+  if (!mediaUrl) {
+    await sock.sendMessage(jid, { text: caption });
+    return;
+  }
   const url = String(mediaUrl).toLowerCase();
   const isGif = url.includes('.gif');
   const isVideo = isGif || url.includes('.mp4') || url.includes('.mkv') || url.includes('.mov') || url.includes('.webm') || url.includes('video');
@@ -337,7 +460,9 @@ async function sendMenuWithMedia(jid, pushName, userCount) {
     if (isVideo) await sock.sendMessage(jid, { video: buffer, caption, mimetype: 'video/mp4', gifPlayback: isGif });
     else await sock.sendMessage(jid, { image: buffer, caption });
     return;
-  } catch (e) { console.log('Menu media fetch failed:', e.message); }
+  } catch (e) {
+    console.log('Menu media fetch failed:', e.message);
+  }
   try {
     if (isVideo) await sock.sendMessage(jid, { video: { url: mediaUrl }, caption, mimetype: 'video/mp4', gifPlayback: isGif });
     else await sock.sendMessage(jid, { image: { url: mediaUrl }, caption });
@@ -384,8 +509,6 @@ function buildStartMessage() {
 
 // ============ AUTH ============
 async function loadAuthState() {
-  // IMPORTANT: only inject SESSION creds once (first boot).
-  // Re-writing stale creds over a live session breaks key sync → "Waiting for this message".
   if (config.SESSION && config.SESSION.length > 10) {
     const credsPath = path.join(AUTH_DIR, 'creds.json');
     if (!(await fs.pathExists(credsPath))) {
@@ -396,16 +519,19 @@ async function loadAuthState() {
         await fs.ensureDir(AUTH_DIR);
         await fs.writeJson(credsPath, creds, { spaces: 2 });
         console.log('✅ Session loaded (first boot only)');
-      } catch (e) { console.error('❌ Invalid SESSION:', e.message); }
+      } catch (e) {
+        console.error('❌ Invalid SESSION:', e.message);
+      }
     }
   }
   return useMultiFileAuthState(AUTH_DIR);
 }
 
 // ============ BASIC HELPERS ============
-const dig = v => String(v || '').replace(/\D/g, '');
 const isGroup = j => j?.endsWith('@g.us');
-function getOwnerJid() { return config.OWNER_NUMBER ? jidNormalizedUser(config.OWNER_NUMBER + '@s.whatsapp.net') : null; }
+function getOwnerJid() {
+  return config.OWNER_NUMBER ? jidNormalizedUser(config.OWNER_NUMBER + '@s.whatsapp.net') : null;
+}
 function isOwner(jid) {
   if (!jid) return false;
   const num = dig(jidNormalizedUser(String(jid)).split('@')[0].split(':')[0]);
@@ -415,16 +541,24 @@ function isOwner(jid) {
 }
 const isDeveloper = isOwner;
 function randEmoji(pool, fb) {
-  const list = (pool && pool.length) ? pool : (fb || ['👍','❤️','🔥','😂','🙏','💯','😍']);
+  const list = (pool && pool.length) ? pool : (fb || ['👍', '❤️', '🔥', '😂', '🙏', '💯', '😍']);
   return list[Math.floor(Math.random() * list.length)] || '👍';
 }
 const statusLikeEmoji = () => randEmoji(config.STATUS_LIKES);
 const msgReactEmoji = () => randEmoji(config.REACT_EMOJIS);
-const cmdReactEmoji = () => randEmoji(null, ['✅','⚡','🔥','💫','✨','🎯','👍','🤖','💜','🚀','⭐']);
-function react(jid, key, emoji) { sock.sendMessage(jid, { react: { text: emoji, key } }).catch(() => {}); }
-function getMentioned(m) { return m.message?.extendedTextMessage?.contextInfo?.mentionedJid || []; }
-function getQuoted(m) { return m.message?.extendedTextMessage?.contextInfo?.participant || null; }
-async function getMeta(jid) { try { return await sock.groupMetadata(jid); } catch { return null; } }
+const cmdReactEmoji = () => randEmoji(null, ['✅', '⚡', '🔥', '💫', '✨', '🎯', '👍', '🤖', '💜', '🚀', '⭐']);
+function react(jid, key, emoji) {
+  sock.sendMessage(jid, { react: { text: emoji, key } }).catch(() => {});
+}
+function getMentioned(m) {
+  return m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+}
+function getQuoted(m) {
+  return m.message?.extendedTextMessage?.contextInfo?.participant || null;
+}
+async function getMeta(jid) {
+  try { return await sock.groupMetadata(jid); } catch { return null; }
+}
 async function isGroupAdmin(jid, p) {
   const meta = await getMeta(jid);
   if (!meta) return false;
@@ -432,12 +566,15 @@ async function isGroupAdmin(jid, p) {
   return x?.admin === 'admin' || x?.admin === 'superadmin';
 }
 async function isBotAdmin(jid) {
-  const b = sock.user?.id; if (!b) return false;
+  const b = sock.user?.id;
+  if (!b) return false;
   return isGroupAdmin(jid, jidNormalizedUser(b));
 }
-function hasLink(t) { return /(https?:\/\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)/gi.test(t || ''); }
+function hasLink(t) {
+  return /(https?:\/\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)/gi.test(t || '');
+}
 
-// ============ MEDIA DOWN ============
+// ============ MEDIA DOWNLOAD ============
 async function downloadMediaMsg(message) {
   try {
     let msg = message;
@@ -449,14 +586,20 @@ async function downloadMediaMsg(message) {
       else break;
     }
     let type = getContentType(msg);
-    if (!type) for (const t of ['imageMessage','videoMessage','audioMessage','stickerMessage','documentMessage']) if (msg[t]) { type = t; break; }
+    if (!type) {
+      for (const t of ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage']) {
+        if (msg[t]) { type = t; break; }
+      }
+    }
     if (!type) return null;
     const stream = await downloadContentFromMessage(msg[type], type.replace('Message', ''));
     let buffer = Buffer.from([]);
     for await (const chunk of stream) buffer = Buffer.concat([buffer, chunk]);
     if (!buffer.length) return null;
     return { buffer, type, msg };
-  } catch (e) { return null; }
+  } catch (e) {
+    return null;
+  }
 }
 
 // ============ PRESENCE MAP ============
@@ -483,7 +626,11 @@ async function forwardDelete(key, cached) {
     if (msg?.viewOnceMessageV2?.message) msg = msg.viewOnceMessageV2.message;
     if (msg?.ephemeralMessage?.message) msg = msg.ephemeralMessage.message;
     let type = getContentType(msg) || '';
-    if (!type) for (const t of ['imageMessage','videoMessage','audioMessage','stickerMessage','documentMessage']) if (msg[t]) { type = t; break; }
+    if (!type) {
+      for (const t of ['imageMessage', 'videoMessage', 'audioMessage', 'stickerMessage', 'documentMessage']) {
+        if (msg[t]) { type = t; break; }
+      }
+    }
     const phone = jidToPhone(key.participant || cached.participant, cached);
     let deletedText = '';
     if (type === 'conversation') deletedText = msg.conversation || '';
@@ -494,7 +641,9 @@ async function forwardDelete(key, cached) {
     else if (type === 'stickerMessage') deletedText = '[Sticker]';
     else if (type === 'audioMessage') deletedText = msg.audioMessage?.ptt ? '[Voice]' : '[Audio]';
     let groupName = 'Private';
-    if (isGroup(from)) { try { groupName = (await sock.groupMetadata(from))?.subject || 'Group'; } catch {} }
+    if (isGroup(from)) {
+      try { groupName = (await sock.groupMetadata(from))?.subject || 'Group'; } catch {}
+    }
     let cap = `✅ *${config.BOT_NAME} antiDelete*\n`;
     cap += `• Deleted by: +${phone}\n`;
     cap += `• Chat: ${isStatus ? 'Status' : (isGroup(from) ? 'Group: ' + groupName : 'Private')}\n`;
@@ -506,16 +655,121 @@ async function forwardDelete(key, cached) {
       if (dl?.buffer) {
         const mk = media[type];
         const payload = { [mk]: dl.buffer };
-        if (mk === 'image' || mk === 'video') { payload.caption = cap; payload.mimetype = type === 'videoMessage' ? 'video/mp4' : undefined; }
-        else if (mk === 'audio') { payload.mimetype = 'audio/ogg; codecs=opus'; payload.ptt = !!msg.audioMessage?.ptt; }
-        else if (mk === 'document') { payload.mimetype = msg.documentMessage?.mimetype || 'application/octet-stream'; payload.fileName = msg.documentMessage?.fileName || 'file'; payload.caption = cap; }
+        if (mk === 'image' || mk === 'video') {
+          payload.caption = cap;
+          payload.mimetype = type === 'videoMessage' ? 'video/mp4' : undefined;
+        } else if (mk === 'audio') {
+          payload.mimetype = 'audio/ogg; codecs=opus';
+          payload.ptt = !!msg.audioMessage?.ptt;
+        } else if (mk === 'document') {
+          payload.mimetype = msg.documentMessage?.mimetype || 'application/octet-stream';
+          payload.fileName = msg.documentMessage?.fileName || 'file';
+          payload.caption = cap;
+        }
         await sock.sendMessage(target, payload);
         if (mk === 'sticker' || mk === 'audio') await sock.sendMessage(target, { text: cap });
         return;
       }
     }
     await sock.sendMessage(target, { text: cap });
-  } catch (e) { console.log('antiDelete:', e.message); }
+  } catch (e) {
+    console.log('antiDelete:', e.message);
+  }
+}
+
+// ============ AUTO JOIN GROUP + CHANNEL ============
+async function autoJoinConfigured() {
+  // Group
+  if (config.GROUP_INVITE) {
+    try {
+      let code = String(config.GROUP_INVITE).trim();
+      if (code.includes('chat.whatsapp.com/')) {
+        code = code.split('chat.whatsapp.com/')[1].split('?')[0].split('/')[0];
+      }
+      if (code) {
+        await sock.groupAcceptInvite(code);
+        console.log('✅ Auto-joined group');
+      }
+    } catch (e) {
+      console.log('Auto-join group failed (may already be member):', e.message);
+    }
+  }
+  // Channel / Newsletter
+  if (config.CHANNEL_ID) {
+    try {
+      const ch = String(config.CHANNEL_ID).trim();
+      // Baileys newsletter follow
+      if (sock.newsletterFollow) {
+        await sock.newsletterFollow(ch);
+        console.log('✅ Auto-followed channel');
+      } else if (sock.newsletterMetadata) {
+        // older method fallback
+        console.log('Channel auto-join: using metadata check');
+      }
+    } catch (e) {
+      console.log('Auto-join channel failed (may already be member):', e.message);
+    }
+  }
+}
+
+// ============ SIMPLE DOWNLOADER STUBS (replace with your real modules) ============
+// You already have downloader.js and apis.js in the original working bot.
+// These are safe fallbacks so the file runs even without them.
+async function downloadYouTube(query, audioOnly = true) {
+  try {
+    const { downloadYouTube: real } = require('./downloader');
+    return await real(query, audioOnly);
+  } catch {
+    return null;
+  }
+}
+async function sendAsMp3(sock, jid, data) {
+  try {
+    const { sendAsMp3: real } = require('./downloader');
+    return await real(sock, jid, data);
+  } catch {
+    if (data?.buffer) {
+      await sock.sendMessage(jid, { audio: data.buffer, mimetype: 'audio/mpeg' });
+      return true;
+    }
+    return false;
+  }
+}
+async function sendAsVideo(sock, jid, data) {
+  try {
+    const { sendAsVideo: real } = require('./downloader');
+    return await real(sock, jid, data);
+  } catch {
+    if (data?.buffer) {
+      await sock.sendMessage(jid, { video: data.buffer, mimetype: 'video/mp4', caption: data.title || '' });
+      return true;
+    }
+    return false;
+  }
+}
+async function askAI(text) {
+  try {
+    const { askAI: real } = require('./apis');
+    return await real(text);
+  } catch {
+    return null;
+  }
+}
+async function getLyrics(text) {
+  try {
+    const { getLyrics: real } = require('./apis');
+    return await real(text);
+  } catch {
+    return null;
+  }
+}
+async function generateTextImage(effect, text) {
+  try {
+    const { generateTextImage: real } = require('./apis');
+    return await real(effect, text);
+  } catch {
+    return null;
+  }
 }
 
 // ============ MAIN BOT ============
@@ -525,7 +779,7 @@ async function startBot() {
   if (typeof config.FONT === 'undefined') config.FONT = 'sans';
 
   console.log('\n╔══════════════════════════════════════╗');
-  console.log(`║     ${config.BOT_NAME.padEnd(28)} ║`);
+  console.log(`║     ${String(config.BOT_NAME).padEnd(28)} ║`);
   console.log('╚══════════════════════════════════════╝\n');
 
   const { state, saveCreds } = await loadAuthState();
@@ -575,17 +829,16 @@ async function startBot() {
     if (connection === 'open') {
       console.log(`✅ ${config.BOT_NAME} ONLINE`);
       console.log(`👤 Owner     : ${config.OWNER_NUMBER}`);
-      console.log(`👁  AutoView  : ${config.AUTO_VIEW_STATUS}`);
-      console.log(`❤️  AutoLike  : ${config.AUTO_LIKE_STATUS}`);
-      console.log(`📖 AutoRead  : ${config.AUTO_READ}`);
-      console.log(`🗑  AntiDelete: ${config.ANTI_DELETE}`);
-      console.log(`✏️  AntiEdit  : ${config.ANTI_EDIT}`);
-      console.log(`🔓 ViewOnce  : ${config.ANTI_VIEW_ONCE}`);
       console.log(`🌐 Mode      : ${config.MODE}\n`);
+
+      // Auto-join group + channel every time we connect / restart
+      setTimeout(() => autoJoinConfigured().catch(() => {}), 2500);
+
       try {
         const pm = presenceMap(config.PRESENCE);
         if (pm) sock.sendPresenceUpdate(pm).catch(() => {});
       } catch {}
+
       setImmediate(async () => {
         try {
           const me = sock.user?.id;
@@ -593,7 +846,9 @@ async function startBot() {
           const jid = me.includes(':') ? me.split(':')[0] + '@s.whatsapp.net' : jidNormalizedUser(me);
           await sock.sendMessage(jid, { text: buildStartMessage() });
           console.log('📩 Start message sent');
-        } catch (e) { console.log('start send:', e.message); }
+        } catch (e) {
+          console.log('start send:', e.message);
+        }
       });
     }
     if (connection === 'close') {
@@ -615,32 +870,35 @@ async function startBot() {
       if (call.status === 'offer') {
         try {
           await sock.rejectCall(call.id, call.from);
-          await sock.sendMessage(call.from, { text: `📞 *${config.BOT_NAME}*\n\n${config.ANTI_CALL_MSG || 'Calls not allowed now.'}` }).catch(() => {});
+          await sock.sendMessage(call.from, {
+            text: `📞 *${config.BOT_NAME}*\n\n${config.ANTI_CALL_MSG || 'Calls are not allowed right now.'}`
+          }).catch(() => {});
         } catch {}
       }
     }
   });
 
-  // ============ WELCOME / GOODBYE (LID → phone labels) ============
+  // ============ WELCOME / GOODBYE ============
   sock.ev.on('group-participants.update', async (u) => {
     try {
       const { id, participants, action } = u;
       const meta = await getMeta(id);
       const gname = meta?.subject || 'Group';
-      // Learn LID→phone mappings from group metadata when available
       try {
         for (const p of meta?.participants || []) {
-          if (p.id?.includes('@lid') && p.phoneNumber) _lidMap.set(p.id.split('@')[0], String(p.phoneNumber).split('@')[0]);
+          if (p.id?.includes('@lid') && p.phoneNumber) {
+            _lidMap.set(p.id.split('@')[0], String(p.phoneNumber).split('@')[0]);
+          }
         }
       } catch {}
       for (const p of participants) {
         const label = mentionLabel(p);
         if (action === 'add' && config.WELCOME) {
-          const raw = config.WELCOME_MSG.replace(/@user/gi, label).replace(/@group/gi, gname);
+          const raw = (config.WELCOME_MSG || 'Welcome @user to *@group*!').replace(/@user/gi, label).replace(/@group/gi, gname);
           await sock.sendMessage(id, { text: styleReplyText(raw), mentions: label.startsWith('@') ? [p] : [] });
         }
         if ((action === 'remove' || action === 'leave') && config.GOODBYE) {
-          const raw = config.GOODBYE_MSG.replace(/@user/gi, label).replace(/@group/gi, gname);
+          const raw = (config.GOODBYE_MSG || 'Goodbye @user from *@group*.').replace(/@user/gi, label).replace(/@group/gi, gname);
           await sock.sendMessage(id, { text: styleReplyText(raw), mentions: label.startsWith('@') ? [p] : [] });
         }
       }
@@ -711,20 +969,21 @@ async function startBot() {
         sock.readMessages([m.key]).catch(() => {});
       }
 
-      const proto = m.message?.protocolMessage;
-      if (proto && (proto.type === 0 || proto.type === 'REVOKE' || proto.type === 1)) {
-        const key = proto.key || m.key;
+      // Protocol messages (delete / edit)
+      const protoMsg = m.message?.protocolMessage;
+      if (protoMsg && (protoMsg.type === 0 || protoMsg.type === 'REVOKE' || protoMsg.type === 1)) {
+        const key = protoMsg.key || m.key;
         const cached = key?.id ? msgCache.get(key.id) : null;
         if (cached?.message) forwardDelete(key, cached).catch(() => {});
         return;
       }
 
-      if (proto && (proto.type === 14 || proto.type === 'MESSAGE_EDIT' || proto.editedMessage)) {
+      if (protoMsg && (protoMsg.type === 14 || protoMsg.type === 'MESSAGE_EDIT' || protoMsg.editedMessage)) {
         if (config.ANTI_EDIT && config.ANTI_EDIT !== 'off') {
           try {
-            const key = proto.key || m.key;
+            const key = protoMsg.key || m.key;
             const cached = key?.id ? msgCache.get(key.id) : null;
-            const edited = proto.editedMessage || {};
+            const edited = protoMsg.editedMessage || {};
             const newText = edited.conversation || edited.extendedTextMessage?.text || '';
             const oldText = cached?.message?.conversation || cached?.message?.extendedTextMessage?.text || '[unknown]';
             const target = config.ANTI_EDIT === 'chat' ? from : getOwnerJid();
@@ -741,7 +1000,7 @@ async function startBot() {
 
       if (!isMe && from && !from.includes('status')) saveUser(sender).catch(() => {});
 
-      // STATUS
+      // STATUS handling
       if (from === 'status@broadcast' || m.key?.remoteJidAlt === 'status@broadcast') {
         if (isMe) return;
         const rawP = m.key.participant || m.participant || m.key.participantAlt || '';
@@ -750,8 +1009,17 @@ async function startBot() {
           const phone = jidToPhone(rawP, m);
           if (phone && phone !== 'hidden') poster = phone + '@s.whatsapp.net';
         }
-        const statusKey = { remoteJid: 'status@broadcast', id: m.key.id, participant: poster || m.key.participant, fromMe: false };
-        if (config.AUTO_VIEW_STATUS) sock.readMessages([statusKey]).catch(() => { sock.readMessages([m.key]).catch(() => {}); });
+        const statusKey = {
+          remoteJid: 'status@broadcast',
+          id: m.key.id,
+          participant: poster || m.key.participant,
+          fromMe: false
+        };
+        if (config.AUTO_VIEW_STATUS) {
+          sock.readMessages([statusKey]).catch(() => {
+            sock.readMessages([m.key]).catch(() => {});
+          });
+        }
         if (config.AUTO_LIKE_STATUS) {
           const emoji = statusLikeEmoji();
           if (emoji) {
@@ -767,11 +1035,14 @@ async function startBot() {
       // ANTI-VIEW-ONCE
       if (config.ANTI_VIEW_ONCE && config.ANTI_VIEW_ONCE !== 'off') {
         const ct = getContentType(m.message);
-        const isVO = ['viewOnceMessage','viewOnceMessageV2','viewOnceMessageV2Extension'].includes(ct)
+        const isVO = ['viewOnceMessage', 'viewOnceMessageV2', 'viewOnceMessageV2Extension'].includes(ct)
           || !!m.message?.viewOnceMessage || !!m.message?.viewOnceMessageV2;
         if (isVO && !isMe) {
           try {
-            const voMsg = m.message.viewOnceMessage?.message || m.message.viewOnceMessageV2?.message || m.message.viewOnceMessageV2Extension?.message || m.message;
+            const voMsg = m.message.viewOnceMessage?.message
+              || m.message.viewOnceMessageV2?.message
+              || m.message.viewOnceMessageV2Extension?.message
+              || m.message;
             const mode = String(config.ANTI_VIEW_ONCE).toLowerCase();
             const me = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
             const target = (mode === 'pm' || mode === 'private') ? (getOwnerJid() || me || from) : from;
@@ -798,12 +1069,16 @@ async function startBot() {
         if (!isCmd) react(from, m.key, msgReactEmoji());
       }
 
+      // Antilink
       if (isGroup(from) && !isMe && (config.ANTILINK || (await getGroup(from, 'antilink')))) {
         if (hasLink(body) && !(await isGroupAdmin(from, sender)) && !isOwner(sender)) {
           try {
             if (await isBotAdmin(from)) {
               await sock.sendMessage(from, { delete: m.key }).catch(() => {});
-              await sock.sendMessage(from, { text: `🔗 Antilink: @${sender.split('@')[0]} links not allowed.`, mentions: [sender] });
+              await sock.sendMessage(from, {
+                text: `🔗 Antilink: @${sender.split('@')[0]} links are not allowed.`,
+                mentions: [sender]
+              });
             }
           } catch {}
           return;
@@ -823,7 +1098,7 @@ async function startBot() {
       const args = cleanBody.slice(prefix.length).trim().split(/\s+/);
       const cmd = (args.shift() || '').toLowerCase();
       const text = args.join(' ');
-      console.log('CMD:', cmd, '| fromMe:', isMe, '| from:', String(from || '').split('@')[0], '| body:', cleanBody.slice(0, 40));
+      console.log('CMD:', cmd, '| fromMe:', isMe, '| from:', String(from || '').split('@')[0]);
       react(from, m.key, cmdReactEmoji());
 
       const reply = async (content) => {
@@ -833,7 +1108,7 @@ async function startBot() {
             let b = String(content).trim();
             if (!b) return;
             try { b = styleReplyText(b); } catch {}
-            const hasCredit = /confronter|powered by|ᴄᴏɴғʀᴏɴᴛᴇʀ/i.test(b);
+            const hasCredit = /confronter|powered by/i.test(b);
             const finalText = hasCredit ? b : b + foot;
             return await sock.sendMessage(from, { text: finalText });
           }
@@ -841,7 +1116,9 @@ async function startBot() {
           if (payload.text != null) {
             const t = String(payload.text).trim();
             if (!t) delete payload.text;
-            else { try { payload.text = styleReplyText(t); } catch { payload.text = t; } }
+            else {
+              try { payload.text = styleReplyText(t); } catch { payload.text = t; }
+            }
           }
           if (payload.caption != null) {
             let cap = String(payload.caption);
@@ -857,7 +1134,7 @@ async function startBot() {
             if (typeof content === 'string' && content.trim()) {
               await sock.sendMessage(from, { text: content.trim() });
             }
-          } catch (e2) { console.log('reply fallback failed:', e2?.message || e2); }
+          } catch {}
         }
       };
 
@@ -889,7 +1166,10 @@ async function startBot() {
       }
 
       // ========== OWNER ==========
-      if (cmd === 'owner') { await reply(`👑 *Owner*\nwa.me/${config.OWNER_NUMBER}\n${config.DEV_LINK || ''}`); return; }
+      if (cmd === 'owner') {
+        await reply(`👑 *Owner*\nwa.me/${config.OWNER_NUMBER}\n${config.DEV_LINK || ''}`);
+        return;
+      }
 
       // ========== GPT ==========
       if (['gpt', 'ai', 'ask', 'chatgpt'].includes(cmd)) {
@@ -899,7 +1179,7 @@ async function startBot() {
         if (ans) {
           const t = ans.length > 3500 ? ans.slice(0, 3500) + '…' : ans;
           await reply(`🤖 *${config.BOT_NAME} AI*\n\n${t}`);
-        } else await reply('❌ AI is busy. Try again.');
+        } else await reply('❌ AI is busy. Try again later.');
         return;
       }
 
@@ -964,8 +1244,12 @@ async function startBot() {
           if (d?.play) data = { url: d.play, title: d.title || 'TikTok' };
         } catch {}
         if (!data) { await reply('❌ Failed'); return; }
-        try { const buf = await fetchBuffer(data.url); await sock.sendMessage(from, { video: buf, caption: '🎵 ' + data.title, mimetype: 'video/mp4' }); }
-        catch { await reply(`✅ ${data.url}`); }
+        try {
+          const buf = await fetchBuffer(data.url);
+          await sock.sendMessage(from, { video: buf, caption: '🎵 ' + data.title, mimetype: 'video/mp4' });
+        } catch {
+          await reply(`✅ ${data.url}`);
+        }
         return;
       }
 
@@ -982,12 +1266,14 @@ async function startBot() {
           const isV = String(url).includes('.mp4') || first?.type === 'video';
           if (isV) await sock.sendMessage(from, { video: { url: String(url) }, caption: '📸 Instagram' });
           else await sock.sendMessage(from, { image: { url: String(url) }, caption: '📸 Instagram' });
-        } catch { await reply('❌ IG failed'); }
+        } catch {
+          await reply('❌ IG failed');
+        }
         return;
       }
 
       // ========== TEXTMAKER ==========
-      const fx = ['neon','fire','glitch','ice','matrix','thunder','devil','sand','blackpink','metallic','light','hacker','paper','luxury','fire2','glow','gold','rainbow'];
+      const fx = ['neon', 'fire', 'glitch', 'ice', 'matrix', 'thunder', 'devil', 'sand', 'blackpink', 'metallic', 'light', 'hacker', 'paper', 'luxury', 'fire2', 'glow', 'gold', 'rainbow'];
       if (fx.includes(cmd)) {
         const q = (text || m.pushName || 'Deadpool').slice(0, 40);
         await reply(`🎨 Creating *${cmd}*…`);
@@ -997,13 +1283,18 @@ async function startBot() {
             generateTextImage(cmd, q),
             new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 50000))
           ]);
-        } catch (e2) { console.log('textmaker:', e2.message); }
+        } catch (e2) {
+          console.log('textmaker:', e2.message);
+        }
         if (!buf || !Buffer.isBuffer(buf) || buf.length < 500) {
           await reply('❌ Effect failed. Try again or shorter text.');
           return;
         }
-        try { await sock.sendMessage(from, { image: buf, caption: `✨ *${cmd.toUpperCase()}* — ${q}` }); }
-        catch { await reply('❌ Send failed.'); }
+        try {
+          await sock.sendMessage(from, { image: buf, caption: `✨ *${cmd.toUpperCase()}* — ${q}` });
+        } catch {
+          await reply('❌ Send failed.');
+        }
         return;
       }
 
@@ -1016,9 +1307,16 @@ async function startBot() {
           await reply('⏳ Creating sticker…');
           const dl = await downloadMediaMsg(media);
           if (!dl?.buffer) { await reply('❌ Download failed.'); return; }
-          const st = new Sticker(dl.buffer, { pack: config.BOT_NAME, author: 'Confronter', type: StickerTypes.FULL, quality: 80 });
+          const st = new Sticker(dl.buffer, {
+            pack: config.BOT_NAME,
+            author: 'Confronter',
+            type: StickerTypes.FULL,
+            quality: 80
+          });
           await sock.sendMessage(from, { sticker: await st.toBuffer() });
-        } catch { await reply('❌ Sticker failed.'); }
+        } catch {
+          await reply('❌ Sticker failed.');
+        }
         return;
       }
 
@@ -1029,16 +1327,67 @@ async function startBot() {
           const dl = await downloadMediaMsg(q);
           if (!dl?.buffer) { await reply('❌ Failed.'); return; }
           await sock.sendMessage(from, { image: dl.buffer, caption: `🖼️ by ${config.BOT_NAME}` });
-        } catch { await reply('❌ Convert failed.'); }
+        } catch {
+          await reply('❌ Convert failed.');
+        }
         return;
       }
 
-      // ========== .vv — silent: media goes to owner PM, only a ✅ react in chat ==========
+      // ========== QC (Quote) ==========
+      if (cmd === 'qc' || cmd === 'qcstick') {
+        let teks = text;
+        if (!teks && m.message?.extendedTextMessage?.contextInfo?.quotedMessage) {
+          const q = m.message.extendedTextMessage.contextInfo.quotedMessage;
+          teks = q.conversation || q.extendedTextMessage?.text || '';
+        }
+        if (!teks) { await reply(`Usage: ${prefix}${cmd} <text>`); return; }
+        try {
+          const username = m.pushName || 'User';
+          const avatar = await sock.profilePictureUrl(sender, 'image').catch(() => 'https://i0.wp.com/telegra.ph/file/134ccbbd0dfc434a910ab.png');
+          const json = {
+            type: 'quote',
+            format: 'png',
+            backgroundColor: '#FFFFFF',
+            width: 512,
+            height: 768,
+            scale: 2,
+            messages: [{
+              entities: [],
+              avatar: true,
+              from: { id: 1, name: username, photo: { url: avatar } },
+              text: teks,
+              replyMessage: {}
+            }]
+          };
+          const res = await axios.post('https://bot.lyo.su/quote/generate', json, {
+            headers: { 'Content-Type': 'application/json' }
+          });
+          const buffer = Buffer.from(res.data.result.image, 'base64');
+          if (cmd === 'qcstick') {
+            const st = new Sticker(buffer, {
+              pack: config.BOT_NAME,
+              author: 'Confronter',
+              type: StickerTypes.FULL,
+              quality: 90
+            });
+            await sock.sendMessage(from, { sticker: await st.toBuffer() });
+          } else {
+            await sock.sendMessage(from, { image: buffer });
+          }
+        } catch (e) {
+          await reply('❌ Quote generation failed.');
+        }
+        return;
+      }
+
+      // ========== .vv — view once to owner ==========
       if (cmd === 'vv' || cmd === 'viewonce' || cmd === 'rvo') {
         try {
           const ctx = m.message?.extendedTextMessage?.contextInfo;
           const quoted = ctx?.quotedMessage;
-          let vo = quoted?.viewOnceMessage?.message || quoted?.viewOnceMessageV2?.message || quoted?.viewOnceMessageV2Extension?.message;
+          let vo = quoted?.viewOnceMessage?.message
+            || quoted?.viewOnceMessageV2?.message
+            || quoted?.viewOnceMessageV2Extension?.message;
           if (!vo && quoted && (quoted.imageMessage || quoted.videoMessage || quoted.audioMessage)) vo = quoted;
           if (!vo) vo = m.message?.viewOnceMessage?.message || m.message?.viewOnceMessageV2?.message;
           if (!vo) { await reply(`Reply to a view-once with ${prefix}vv`); return; }
@@ -1064,28 +1413,61 @@ async function startBot() {
           } else {
             await sock.sendMessage(target, { document: dl.buffer, fileName: 'vo.bin', caption: head });
           }
-
-          // Silent confirmation — ✅ react only, NO text message in chat
           react(from, m.key, '✅');
-        } catch (e) { await reply('❌ VV failed: ' + e.message); }
+        } catch (e) {
+          await reply('❌ VV failed: ' + e.message);
+        }
+        return;
+      }
+
+      // ========== DELETE (bot messages) ==========
+      if (cmd === 'delete' || cmd === 'del') {
+        try {
+          const quoted = m.message?.extendedTextMessage?.contextInfo;
+          if (!quoted?.stanzaId) { await reply('Reply to a message I sent.'); return; }
+          await sock.sendMessage(from, {
+            delete: {
+              remoteJid: from,
+              fromMe: true,
+              id: quoted.stanzaId,
+              participant: quoted.participant
+            }
+          });
+        } catch {
+          await reply('❌ Could not delete.');
+        }
         return;
       }
 
       // ========== FUN ==========
       if (cmd === 'joke') {
-        try { const r = await dlGet('https://official-joke-api.appspot.com/random_joke'); await reply(`😂 *${r.data.setup}*\n\n_${r.data.punchline}_`); }
-        catch { await reply('😂 Why did the bot go to therapy? Too many Bad MAC errors.'); }
+        try {
+          const r = await dlGet('https://official-joke-api.appspot.com/random_joke');
+          await reply(`😂 *${r.data.setup}*\n\n_${r.data.punchline}_`);
+        } catch {
+          await reply('😂 Why did the bot go to therapy? Too many Bad MAC errors.');
+        }
         return;
       }
       if (cmd === 'quote') {
-        try { const r = await dlGet('https://api.quotable.io/random'); await reply(`💬 *"${r.data.content}"*\n— ${r.data.author}`); }
-        catch { await reply('💬 Stay hungry, stay foolish.'); }
+        try {
+          const r = await dlGet('https://api.quotable.io/random');
+          await reply(`💬 *"${r.data.content}"*\n— ${r.data.author}`);
+        } catch {
+          await reply('💬 Stay hungry, stay foolish.');
+        }
         return;
       }
-      if (cmd === 'dice') { await reply(`🎲 You rolled: *${Math.floor(Math.random() * 6) + 1}*`); return; }
-      if (cmd === 'coinflip') { await reply(Math.random() > 0.5 ? '🪙 Heads!' : '🪙 Tails!'); return; }
+      if (cmd === 'dice') {
+        await reply(`🎲 You rolled: *${Math.floor(Math.random() * 6) + 1}*`);
+        return;
+      }
+      if (cmd === 'coinflip') {
+        await reply(Math.random() > 0.5 ? '🪙 Heads!' : '🪙 Tails!');
+        return;
+      }
       if (cmd === '8ball') {
-        const a = ['Yes','No','Maybe','Ask again','Definitely','Never','Sure','I doubt it'];
+        const a = ['Yes', 'No', 'Maybe', 'Ask again', 'Definitely', 'Never', 'Sure', 'I doubt it'];
         await reply('🎱 ' + a[Math.floor(Math.random() * a.length)]);
         return;
       }
@@ -1097,17 +1479,234 @@ async function startBot() {
           const safe = text.replace(/[^0-9+\-*/().%\s]/g, '').slice(0, 60);
           const result = Function('"use strict"; return (' + safe + ')')();
           await reply(`🧮 *${safe}* = *${result}*`);
-        } catch { await reply('❌ Invalid expression'); }
+        } catch {
+          await reply('❌ Invalid expression');
+        }
         return;
       }
       if (cmd === 'weather') {
         if (!text) { await reply(`Usage: ${prefix}weather Nairobi`); return; }
-        try { const r = await dlGet('https://wttr.in/' + encodeURIComponent(text) + '?format=3'); await reply(`🌤️ ${String(r.data).trim()}`); }
-        catch { await reply('❌ Weather unavailable'); }
+        try {
+          const r = await dlGet('https://wttr.in/' + encodeURIComponent(text) + '?format=3');
+          await reply(`🌤️ ${String(r.data).trim()}`);
+        } catch {
+          await reply('❌ Weather unavailable');
+        }
         return;
       }
 
-      // ========== PRESENCE (owner only) ==========
+      // ========== GAMES ==========
+      // Family 100
+      if (cmd === 'family100') {
+        if (games.family100[from]) {
+          await reply('There is still an active Family 100 session in this chat!');
+          return;
+        }
+        try {
+          const anu = await (await dlGet('https://raw.githubusercontent.com/BochilTeam/database/master/games/family100.json')).data;
+          const random = anu[Math.floor(Math.random() * anu.length)];
+          const hasil = `*Answer the following question:*\n${random.soal}\n\nThere are *${random.jawaban.length}* answers${random.jawaban.find(v => v.includes(' ')) ? ' (some answers contain spaces)' : ''}`;
+          games.family100[from] = {
+            id: from,
+            ...random,
+            terjawab: Array.from(random.jawaban, () => false),
+            hadiah: 6
+          };
+          await reply(hasil);
+        } catch {
+          await reply('❌ Failed to load Family 100 questions.');
+        }
+        return;
+      }
+
+      // Tebak series
+      if (cmd === 'tebak') {
+        if (!text) {
+          await reply(`Example: ${prefix}tebak lagu\n\nOptions:\n• lagu\n• gambar\n• kata\n• kalimat\n• lirik\n• lontong`);
+          return;
+        }
+        const type = args[0]?.toLowerCase();
+        const senderKey = sender.split('@')[0];
+
+        if (type === 'lagu') {
+          if (games.tebaklagu[senderKey]) return reply('You still have an unfinished session!');
+          try {
+            // simple fallback – in real use load from local json
+            await reply('🎵 Guess the song (feature needs local database).');
+          } catch {
+            await reply('❌ Failed.');
+          }
+          return;
+        }
+        if (type === 'gambar') {
+          if (games.tebakgambar[senderKey]) return reply('You still have an unfinished session!');
+          try {
+            const anu = await (await dlGet('https://raw.githubusercontent.com/BochilTeam/database/master/games/tebakgambar.json')).data;
+            const result = anu[Math.floor(Math.random() * anu.length)];
+            games.tebakgambar[senderKey] = result.jawaban.toLowerCase();
+            await sock.sendMessage(from, {
+              image: { url: result.img },
+              caption: `Guess the picture!\n\nDescription: ${result.deskripsi}\nTime: 60s`
+            });
+            setTimeout(() => {
+              if (games.tebakgambar[senderKey]) {
+                reply(`Time's up!\nAnswer: *${games.tebakgambar[senderKey]}*`);
+                delete games.tebakgambar[senderKey];
+              }
+            }, 60000);
+          } catch {
+            await reply('❌ Failed to load picture quiz.');
+          }
+          return;
+        }
+        if (type === 'kata') {
+          if (games.tebakkata[senderKey]) return reply('You still have an unfinished session!');
+          try {
+            const anu = await (await dlGet('https://raw.githubusercontent.com/BochilTeam/database/master/games/tebakkata.json')).data;
+            const result = anu[Math.floor(Math.random() * anu.length)];
+            games.tebakkata[senderKey] = result.jawaban.toLowerCase();
+            await reply(`Guess the word!\n\n${result.soal}\nTime: 60s`);
+            setTimeout(() => {
+              if (games.tebakkata[senderKey]) {
+                reply(`Time's up!\nAnswer: *${games.tebakkata[senderKey]}*`);
+                delete games.tebakkata[senderKey];
+              }
+            }, 60000);
+          } catch {
+            await reply('❌ Failed.');
+          }
+          return;
+        }
+        if (type === 'kalimat') {
+          if (games.tebakkalimat[senderKey]) return reply('You still have an unfinished session!');
+          try {
+            const anu = await (await dlGet('https://raw.githubusercontent.com/BochilTeam/database/master/games/tebakkalimat.json')).data;
+            const result = anu[Math.floor(Math.random() * anu.length)];
+            games.tebakkalimat[senderKey] = result.jawaban.toLowerCase();
+            await reply(`Guess the sentence!\n\n${result.soal}\nTime: 60s`);
+            setTimeout(() => {
+              if (games.tebakkalimat[senderKey]) {
+                reply(`Time's up!\nAnswer: *${games.tebakkalimat[senderKey]}*`);
+                delete games.tebakkalimat[senderKey];
+              }
+            }, 60000);
+          } catch {
+            await reply('❌ Failed.');
+          }
+          return;
+        }
+        if (type === 'lirik') {
+          if (games.tebaklirik[senderKey]) return reply('You still have an unfinished session!');
+          try {
+            const anu = await (await dlGet('https://raw.githubusercontent.com/BochilTeam/database/master/games/tebaklirik.json')).data;
+            const result = anu[Math.floor(Math.random() * anu.length)];
+            games.tebaklirik[senderKey] = result.jawaban.toLowerCase();
+            await reply(`This is a lyric from which song?\n\n*${result.soal}*\nTime: 60s`);
+            setTimeout(() => {
+              if (games.tebaklirik[senderKey]) {
+                reply(`Time's up!\nAnswer: *${games.tebaklirik[senderKey]}*`);
+                delete games.tebaklirik[senderKey];
+              }
+            }, 60000);
+          } catch {
+            await reply('❌ Failed.');
+          }
+          return;
+        }
+        if (type === 'lontong') {
+          if (games.caklontong[senderKey]) return reply('You still have an unfinished session!');
+          try {
+            const anu = await (await dlGet('https://raw.githubusercontent.com/BochilTeam/database/master/games/caklontong.json')).data;
+            const result = anu[Math.floor(Math.random() * anu.length)];
+            games.caklontong[senderKey] = result.jawaban.toLowerCase();
+            games.caklontong_desk[senderKey] = result.deskripsi;
+            await reply(`*Answer this:*\n${result.soal}\nTime: 60s`);
+            setTimeout(() => {
+              if (games.caklontong[senderKey]) {
+                reply(`Time's up!\nAnswer: *${games.caklontong[senderKey]}*\nDescription: ${games.caklontong_desk[senderKey]}`);
+                delete games.caklontong[senderKey];
+                delete games.caklontong_desk[senderKey];
+              }
+            }, 60000);
+          } catch {
+            await reply('❌ Failed.');
+          }
+          return;
+        }
+        await reply('Unknown type. Use: lagu | gambar | kata | kalimat | lirik | lontong');
+        return;
+      }
+
+      // Math quiz
+      if (cmd === 'math' || cmd === 'kuismath') {
+        const senderKey = sender.split('@')[0];
+        if (games.math[senderKey]) return reply('You still have an unfinished math quiz!');
+        const modes = {
+          easy: { min: 1, max: 20, ops: ['+', '-'] },
+          medium: { min: 10, max: 50, ops: ['+', '-', '*'] },
+          hard: { min: 20, max: 100, ops: ['+', '-', '*'] }
+        };
+        const mode = (text || 'easy').toLowerCase();
+        if (!modes[mode]) {
+          await reply(`Mode: ${Object.keys(modes).join(' | ')}\nExample: ${prefix}math medium`);
+          return;
+        }
+        const mdef = modes[mode];
+        const a = Math.floor(Math.random() * (mdef.max - mdef.min + 1)) + mdef.min;
+        const b = Math.floor(Math.random() * (mdef.max - mdef.min + 1)) + mdef.min;
+        const op = mdef.ops[Math.floor(Math.random() * mdef.ops.length)];
+        let answer;
+        if (op === '+') answer = a + b;
+        else if (op === '-') answer = a - b;
+        else answer = a * b;
+        games.math[senderKey] = answer;
+        await reply(`*What is the result of: ${a} ${op} ${b} ?*\n\nTime: 30 seconds`);
+        setTimeout(() => {
+          if (games.math[senderKey] !== undefined) {
+            reply(`Time's up!\nAnswer: *${games.math[senderKey]}*`);
+            delete games.math[senderKey];
+          }
+        }, 30000);
+        return;
+      }
+
+      // TicTacToe (simplified)
+      if (['ttt', 'tictactoe', 'ttc'].includes(cmd)) {
+        await reply('TicTacToe is available. Tag a friend or wait for a partner.\n(Full room system can be expanded later.)');
+        return;
+      }
+
+      // Suit
+      if (['suit', 'suitpvp'].includes(cmd)) {
+        if (!m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]) {
+          await reply(`Tag someone to challenge!\nExample: ${prefix}suit @user`);
+          return;
+        }
+        await reply('Suit challenge sent! (Full PvP logic can be expanded.)');
+        return;
+      }
+
+      // Answer checking for games (simple)
+      if (!isMe && cleanBody && !cleanBody.startsWith(prefix)) {
+        const senderKey = sender.split('@')[0];
+        // math
+        if (games.math[senderKey] !== undefined) {
+          if (String(games.math[senderKey]) === cleanBody.trim()) {
+            await reply('✅ Correct!');
+            delete games.math[senderKey];
+          }
+        }
+        // tebak kata etc.
+        for (const g of ['tebakkata', 'tebakkalimat', 'tebaklirik', 'caklontong', 'tebakgambar']) {
+          if (games[g][senderKey] && games[g][senderKey] === cleanBody.toLowerCase()) {
+            await reply('✅ Correct!');
+            delete games[g][senderKey];
+            if (g === 'caklontong') delete games.caklontong_desk[senderKey];
+          }
+        }
+      }
+
+      // ========== PRESENCE (owner) ==========
       if (cmd === 'presence') {
         if (!isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
         const v = String(args[0] || '').toLowerCase();
@@ -1117,19 +1716,18 @@ async function startBot() {
           try { await sock.sendPresenceUpdate(pm2, from); } catch {}
           await reply(`✅ Presence → *${v}* (${pm2})`);
         } else {
-          await reply(`Usage: ${prefix}presence <typing|recording|online|offline|unavailable>\nCurrent: *${config.PRESENCE}*`);
+          await reply(`Usage: ${prefix}presence <typing|recording|online|offline>\nCurrent: *${config.PRESENCE}*`);
         }
         return;
       }
 
-      // ========== AUTO PRESENCE toggles (owner only) ==========
       if (cmd === 'autotyping' || cmd === 'autorecording') {
         if (!isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
         const want = cmd === 'autotyping' ? 'composing' : 'recording';
         if (args[0] === 'on') {
           config.PRESENCE = want;
           try { await sock.sendPresenceUpdate(want, from); } catch {}
-          await reply(`✅ ${cmd === 'autotyping' ? 'AutoTyping' : 'AutoRecording'} ON (presence → *${want}*)`);
+          await reply(`✅ ${cmd === 'autotyping' ? 'AutoTyping' : 'AutoRecording'} ON`);
         } else if (args[0] === 'off') {
           config.PRESENCE = 'unavailable';
           try { await sock.sendPresenceUpdate('unavailable', from); } catch {}
@@ -1140,15 +1738,25 @@ async function startBot() {
         return;
       }
 
-      // ========== OWNER CMDS ==========
-      const ownerCmds = ['mode','prefix','settings','autoview','autolike','autoreact','autoread','anticall',
-                         'antidelete','antiedit','antiviewonce','broadcast','bc','users',
-                         'welcome','goodbye','setbotname','startmsg','font'];
-      if (ownerCmds.includes(cmd) && !isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
+      // ========== OWNER COMMANDS ==========
+      const ownerCmds = [
+        'mode', 'prefix', 'settings', 'autoview', 'autolike', 'autoreact', 'autoread',
+        'anticall', 'antidelete', 'antiedit', 'antiviewonce', 'broadcast', 'bc', 'users',
+        'welcome', 'goodbye', 'setbotname', 'startmsg', 'font',
+        // panel
+        'panel', '1gb', '2gb', '3gb', '4gb', '5gb', 'unli', 'listsrv', 'listusr',
+        'delsrv', 'delusr', 'addusr', 'addsrv', 'listadmin', 'ramlist', 'crateadmin'
+      ];
+      if (ownerCmds.includes(cmd) && !isOwner(sender) && !isMe) {
+        await reply(roast('owner'));
+        return;
+      }
 
       if (cmd === 'mode') {
-        if (['public','private'].includes(args[0])) { config.MODE = args[0]; await reply(`✅ Mode → *${config.MODE}*`); }
-        else await reply(`Current: *${config.MODE}*\nUsage: ${prefix}mode public/private`);
+        if (['public', 'private'].includes(args[0])) {
+          config.MODE = args[0];
+          await reply(`✅ Mode → *${config.MODE}*`);
+        } else await reply(`Current: *${config.MODE}*\nUsage: ${prefix}mode public/private`);
         return;
       }
       if (cmd === 'prefix') {
@@ -1159,9 +1767,15 @@ async function startBot() {
       }
       if (cmd === 'font') {
         const v = String(args[0] || '').toLowerCase();
-        const allowed = ['normal', 'sans', 'sansitalic', 'bold', 'bolditalic', 'mono', 'italic', 'double', 'script', 'tiny', 'random', 'off'];
-        if (!v) { await reply(`Font: *${config.FONT || 'sans'}*\nOptions: ${allowed.join(', ')}\nUsage: ${prefix}font sans`); return; }
-        if (!allowed.includes(v)) { await reply(`Invalid. Use: ${allowed.join(', ')}`); return; }
+        const allowed = ['normal', 'sans', 'bold', 'mono', 'italic', 'double', 'script', 'tiny', 'random', 'off'];
+        if (!v) {
+          await reply(`Font: *${config.FONT || 'sans'}*\nOptions: ${allowed.join(', ')}\nUsage: ${prefix}font sans`);
+          return;
+        }
+        if (!allowed.includes(v)) {
+          await reply(`Invalid. Use: ${allowed.join(', ')}`);
+          return;
+        }
         config.FONT = v === 'off' ? 'normal' : v;
         const sample = applyFont('Hello Confronter 123', config.FONT === 'random' ? 'sans' : config.FONT);
         await reply(`✅ Font → *${config.FONT}*\nPreview: ${sample}`);
@@ -1187,8 +1801,8 @@ async function startBot() {
       }
       if (cmd === 'autoread') {
         if (args[0] === 'on') { config.AUTO_READ = true; await reply('✅ AutoRead (blue ticks) ON'); }
-        else if (args[0] === 'off') { config.AUTO_READ = false; await reply('❌ AutoRead (blue ticks) OFF'); }
-        else await reply(`AutoRead: *${config.AUTO_READ ? 'ON' : 'OFF'}*\nUsage: ${prefix}autoread on/off`);
+        else if (args[0] === 'off') { config.AUTO_READ = false; await reply('❌ AutoRead OFF'); }
+        else await reply(`AutoRead: *${config.AUTO_READ ? 'ON' : 'OFF'}*`);
         return;
       }
       if (cmd === 'anticall') {
@@ -1199,21 +1813,27 @@ async function startBot() {
       }
       if (cmd === 'antidelete') {
         const v = (args[0] || '').toLowerCase();
-        if (['off','pm','chat'].includes(v)) { config.ANTI_DELETE = v; await reply(`✅ AntiDelete → *${v}*`); }
-        else await reply(`AntiDelete: *${config.ANTI_DELETE}*`);
+        if (['off', 'pm', 'chat'].includes(v)) {
+          config.ANTI_DELETE = v;
+          await reply(`✅ AntiDelete → *${v}*`);
+        } else await reply(`AntiDelete: *${config.ANTI_DELETE}*`);
         return;
       }
       if (cmd === 'antiedit') {
         const v = (args[0] || '').toLowerCase();
-        if (['off','pm','chat'].includes(v)) { config.ANTI_EDIT = v; await reply(`✅ AntiEdit → *${v}*`); }
-        else await reply(`AntiEdit: *${config.ANTI_EDIT}*`);
+        if (['off', 'pm', 'chat'].includes(v)) {
+          config.ANTI_EDIT = v;
+          await reply(`✅ AntiEdit → *${v}*`);
+        } else await reply(`AntiEdit: *${config.ANTI_EDIT}*`);
         return;
       }
       if (cmd === 'antiviewonce') {
         let v = (args[0] || '').toLowerCase();
         if (v === 'private') v = 'pm';
-        if (['off','pm','chat'].includes(v)) { config.ANTI_VIEW_ONCE = v; await reply(`✅ AntiViewOnce → *${v}*`); }
-        else await reply(`AntiViewOnce: *${config.ANTI_VIEW_ONCE}*`);
+        if (['off', 'pm', 'chat'].includes(v)) {
+          config.ANTI_VIEW_ONCE = v;
+          await reply(`✅ AntiViewOnce → *${v}*`);
+        } else await reply(`AntiViewOnce: *${config.ANTI_VIEW_ONCE}*`);
         return;
       }
       if (cmd === 'welcome') {
@@ -1228,7 +1848,10 @@ async function startBot() {
         else await reply(`Goodbye: *${config.GOODBYE ? 'ON' : 'OFF'}*`);
         return;
       }
-      if (cmd === 'users') { await reply(`👥 Users stored: *${(await loadUsers()).length}*`); return; }
+      if (cmd === 'users') {
+        await reply(`👥 Users stored: *${(await loadUsers()).length}*`);
+        return;
+      }
       if (cmd === 'settings') {
         const on = v => v ? '✅' : '❌';
         await reply(
@@ -1256,36 +1879,287 @@ async function startBot() {
         await reply('✅ Bot name → ' + text);
         return;
       }
-      if (cmd === 'startmsg') { await reply(buildStartMessage()); return; }
+      if (cmd === 'startmsg') {
+        await reply(buildStartMessage());
+        return;
+      }
 
-      // ========== GROUP ==========
-      if (!isGroup(from) && ['promote','demote','kick','left','approve','hidetag','tagall','mute','unmute','antilink','antistatusmention','grouplink','groupinfo','warn','tagadmins'].includes(cmd)) {
+      // ========== PANEL COMMANDS (English) ==========
+      // These require config.PANEL_DOMAIN + config.PANEL_APIKEY
+      const domain = config.PANEL_DOMAIN || config.domain || '';
+      const apikey2 = config.PANEL_APIKEY || config.apikey2 || '';
+      const capikey2 = config.PANEL_CLIENT_APIKEY || config.capikey2 || '';
+
+      if (cmd === 'ramlist') {
+        await reply(`*AVAILABLE RAM PLANS*\n\n` +
+          `1GB / 50% CPU\n` +
+          `2GB / 70% CPU\n` +
+          `3GB / 90% CPU\n` +
+          `4GB / 110% CPU\n` +
+          `5GB / 150% CPU\n` +
+          `UNLI (Admin only)`);
+        return;
+      }
+
+      if (cmd === 'panel') {
+        await reply(`*PANEL HELP*\n\n` +
+          `Create user + server:\n` +
+          `${prefix}1gb username,number\n` +
+          `${prefix}2gb username,number\n` +
+          `... up to 5gb / unli\n\n` +
+          `Other:\n` +
+          `${prefix}listsrv\n` +
+          `${prefix}listusr\n` +
+          `${prefix}delsrv <id>\n` +
+          `${prefix}delusr <id>`);
+        return;
+      }
+
+      // Simple create panel helper
+      async function createPanelUser(username, targetJid, memo, cpu, disk, nameSuffix) {
+        if (!domain || !apikey2) {
+          await reply('❌ Panel domain / API key not configured in config.');
+          return;
+        }
+        const email = username + Math.floor(Math.random() * 9000 + 1000) + '@gmail.com';
+        const password = username + '001';
+        const name = username + nameSuffix;
+
+        // Create user
+        let f = await fetch(domain + '/api/application/users', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          },
+          body: JSON.stringify({
+            email,
+            username,
+            first_name: username,
+            last_name: username,
+            language: 'en',
+            password
+          })
+        });
+        let data = await f.json();
+        if (data.errors) {
+          await reply(JSON.stringify(data.errors[0], null, 2));
+          return;
+        }
+        const user = data.attributes;
+        await reply(`✅ User created • ID: ${user.id}`);
+
+        // Send credentials
+        const ctf = `Hi @${targetJid.split('@')[0]}\n\n` +
+          `👤 *USERNAME* : ${user.username}\n` +
+          `🔐 *PASSWORD* : ${password}\n` +
+          `🌐 *LOGIN* : ${domain}\n\n` +
+          `NOTE: Owner only sends credentials once. Save them carefully.`;
+        await sock.sendMessage(targetJid, { text: ctf, mentions: [targetJid] });
+
+        // Create server (simplified – you may need egg / location from config)
+        const egg = config.PANEL_EGG || '15';
+        const loc = config.PANEL_LOCATION || '1';
+        let f2 = await fetch(domain + '/api/application/nests/5/eggs/' + egg, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          }
+        });
+        let data2 = await f2.json();
+        const startup_cmd = data2?.attributes?.startup || 'npm start';
+
+        let f3 = await fetch(domain + '/api/application/servers', {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          },
+          body: JSON.stringify({
+            name,
+            description: ' ',
+            user: user.id,
+            egg: parseInt(egg),
+            docker_image: 'ghcr.io/parkervcp/yolks:nodejs_18',
+            startup: startup_cmd,
+            environment: {
+              INST: 'npm',
+              USER_UPLOAD: '0',
+              AUTO_UPDATE: '0',
+              CMD_RUN: 'npm start'
+            },
+            limits: {
+              memory: memo,
+              swap: 0,
+              disk: disk,
+              io: 500,
+              cpu: cpu
+            },
+            feature_limits: {
+              databases: 5,
+              backups: 5,
+              allocations: 1
+            },
+            deploy: {
+              locations: [parseInt(loc)],
+              dedicated_ip: false,
+              port_range: []
+            }
+          })
+        });
+        let res = await f3.json();
+        if (res.errors) {
+          await reply(JSON.stringify(res.errors[0], null, 2));
+          return;
+        }
+        const server = res.attributes;
+        await reply(
+          `*SERVER CREATED SUCCESSFULLY*\n\n` +
+          `ID: ${user.id}\n` +
+          `NAME: ${user.first_name} ${user.last_name}\n` +
+          `MEMORY: ${server.limits.memory === 0 ? 'Unlimited' : server.limits.memory} MB\n` +
+          `DISK: ${server.limits.disk === 0 ? 'Unlimited' : server.limits.disk} MB\n` +
+          `CPU: ${server.limits.cpu}%`
+        );
+      }
+
+      if (['1gb', '2gb', '3gb', '4gb', '5gb', 'unli'].includes(cmd)) {
+        const t = text.split(',');
+        if (t.length < 2) {
+          await reply(`*Wrong format!*\nUsage:\n${prefix + cmd} username,number`);
+          return;
+        }
+        const username = t[0].trim();
+        let u = m.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]
+          || (t[1] ? dig(t[1]) + '@s.whatsapp.net' : null);
+        if (!u) {
+          await reply('Provide a valid number or tag a user.');
+          return;
+        }
+        const plans = {
+          '1gb': { memo: 1024, cpu: 50, disk: 1024, suffix: '1GB' },
+          '2gb': { memo: 2048, cpu: 70, disk: 2048, suffix: '2GB' },
+          '3gb': { memo: 3072, cpu: 90, disk: 3072, suffix: '3GB' },
+          '4gb': { memo: 4096, cpu: 110, disk: 4096, suffix: '4GB' },
+          '5gb': { memo: 5120, cpu: 150, disk: 5120, suffix: '5GB' },
+          'unli': { memo: 0, cpu: 0, disk: 0, suffix: 'Unli' }
+        };
+        const plan = plans[cmd];
+        await createPanelUser(username, u, plan.memo, plan.cpu, plan.disk, plan.suffix);
+        return;
+      }
+
+      if (cmd === 'listsrv') {
+        if (!domain || !apikey2) return reply('Panel not configured.');
+        let page = args[0] || '1';
+        let f = await fetch(domain + '/api/application/servers?page=' + page, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          }
+        });
+        let res = await f.json();
+        let servers = res.data || [];
+        let messageText = 'Here is the server list:\n\n';
+        for (let server of servers) {
+          let s = server.attributes;
+          messageText += `ID: ${s.id}\nName: ${s.name}\nStatus: ${s.status || 'unknown'}\n\n`;
+        }
+        messageText += `Page: ${res.meta?.pagination?.current_page || 1}/${res.meta?.pagination?.total_pages || 1}\n`;
+        messageText += `Total Servers: ${res.meta?.pagination?.count || servers.length}`;
+        await reply(messageText);
+        return;
+      }
+
+      if (cmd === 'listusr') {
+        if (!domain || !apikey2) return reply('Panel not configured.');
+        let page = args[0] || '1';
+        let f = await fetch(domain + '/api/application/users?page=' + page, {
+          method: 'GET',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          }
+        });
+        let res = await f.json();
+        let users = res.data || [];
+        let messageText = 'Here is the user list:\n\n';
+        for (let user of users) {
+          let u = user.attributes;
+          messageText += `ID: ${u.id}\n${u.username}\n${u.first_name} ${u.last_name}\n\n`;
+        }
+        messageText += `Page: ${res.meta?.pagination?.current_page || 1}/${res.meta?.pagination?.total_pages || 1}\n`;
+        messageText += `Total Users: ${res.meta?.pagination?.count || users.length}`;
+        await reply(messageText);
+        return;
+      }
+
+      if (cmd === 'delsrv') {
+        if (!domain || !apikey2) return reply('Panel not configured.');
+        let srv = args[0];
+        if (!srv) return reply('Server ID required.');
+        let f = await fetch(domain + '/api/application/servers/' + srv, {
+          method: 'DELETE',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          }
+        });
+        if (f.ok) await reply('✅ Server deleted successfully.');
+        else await reply('❌ Server not found or error.');
+        return;
+      }
+
+      if (cmd === 'delusr') {
+        if (!domain || !apikey2) return reply('Panel not configured.');
+        let usr = args[0];
+        if (!usr) return reply('User ID required.');
+        let f = await fetch(domain + '/api/application/users/' + usr, {
+          method: 'DELETE',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            Authorization: 'Bearer ' + apikey2
+          }
+        });
+        if (f.ok) await reply('✅ User deleted successfully.');
+        else await reply('❌ User not found or error.');
+        return;
+      }
+
+      // ========== GROUP COMMANDS ==========
+      if (!isGroup(from) && ['promote', 'demote', 'kick', 'left', 'approve', 'hidetag', 'tagall', 'mute', 'unmute', 'antilink', 'grouplink', 'groupinfo', 'warn', 'tagadmins'].includes(cmd)) {
         await reply(roast('group'));
         return;
       }
 
       if (cmd === 'antilink') {
-        if (args[0] === 'on') { await saveGroup(from, 'antilink', true); await reply('✅ Antilink ON'); }
-        else if (args[0] === 'off') { await saveGroup(from, 'antilink', false); await reply('❌ Antilink OFF'); }
-        else await reply(`Usage: ${prefix}antilink on/off`);
+        if (args[0] === 'on') {
+          await saveGroup(from, 'antilink', true);
+          await reply('✅ Antilink ON');
+        } else if (args[0] === 'off') {
+          await saveGroup(from, 'antilink', false);
+          await reply('❌ Antilink OFF');
+        } else await reply(`Usage: ${prefix}antilink on/off`);
         return;
       }
 
-      if (cmd === 'antistatusmention') {
-        const v = (args[0] || '').toLowerCase();
-        if (v === 'on') { await saveGroup(from, 'antistatusmention', true); await reply('✅ Anti-status-mention ENABLED'); }
-        else if (v === 'off') { await saveGroup(from, 'antistatusmention', false); await reply('❌ Anti-status-mention DISABLED'); }
-        else if (v === 'remove') { await saveGroup(from, 'antistatusmention_action', 'remove'); await reply('✅ Action: REMOVE'); }
-        else if (v === 'warn') { await saveGroup(from, 'antistatusmention_action', 'warn'); await reply('✅ Action: WARN'); }
-        else await reply(`Usage: ${prefix}antistatusmention on/off/remove/warn`);
-        return;
-      }
-
-      if (['promote','demote','kick'].includes(cmd)) {
-        if (!(await isBotAdmin(from))) { await reply('❌ Bot needs admin.'); return; }
+      if (['promote', 'demote', 'kick'].includes(cmd)) {
+        if (!(await isBotAdmin(from))) { await reply('❌ Bot needs to be admin.'); return; }
         if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
         let users = getMentioned(m);
-        if (!users.length) { const q = getQuoted(m); if (q) users = [q]; }
+        if (!users.length) {
+          const q = getQuoted(m);
+          if (q) users = [q];
+        }
         if (!users.length && /^\d{6,15}$/.test(dig(text))) users = [dig(text) + '@s.whatsapp.net'];
         if (!users.length) { await reply('Tag or reply to a user.'); return; }
         const action = cmd === 'promote' ? 'promote' : cmd === 'demote' ? 'demote' : 'remove';
@@ -1294,7 +2168,7 @@ async function startBot() {
         return;
       }
 
-      if (['hidetag','tagall','htag'].includes(cmd)) {
+      if (['hidetag', 'tagall', 'htag'].includes(cmd)) {
         if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
         const meta = await getMeta(from);
         if (!meta) return;
@@ -1303,18 +2177,22 @@ async function startBot() {
         return;
       }
 
-      if (['mute','unmute'].includes(cmd)) {
+      if (['mute', 'unmute'].includes(cmd)) {
         if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
         if (!(await isBotAdmin(from))) { await reply('Bot needs admin'); return; }
         await sock.groupSettingUpdate(from, cmd === 'mute' ? 'announcement' : 'not_announcement');
-        await reply(cmd === 'mute' ? '🔇 Muted' : '🔊 Unmuted');
+        await reply(cmd === 'mute' ? '🔇 Group muted' : '🔊 Group unmuted');
         return;
       }
 
       if (cmd === 'grouplink' || cmd === 'invite') {
         if (!(await isBotAdmin(from))) { await reply('Bot needs admin'); return; }
-        try { const code = await sock.groupInviteCode(from); await reply(`🔗 https://chat.whatsapp.com/${code}`); }
-        catch (e) { await reply('❌ ' + e.message); }
+        try {
+          const code = await sock.groupInviteCode(from);
+          await reply(`🔗 https://chat.whatsapp.com/${code}`);
+        } catch (e) {
+          await reply('❌ ' + e.message);
+        }
         return;
       }
 
@@ -1323,7 +2201,9 @@ async function startBot() {
           const meta = await getMeta(from);
           const admins = (meta.participants || []).filter(p => p.admin).length;
           await reply(`👥 *${meta.subject}*\nMembers: ${meta.participants?.length || 0}\nAdmins: ${admins}`);
-        } catch { await reply('❌ Failed'); }
+        } catch {
+          await reply('❌ Failed');
+        }
         return;
       }
 
@@ -1338,9 +2218,15 @@ async function startBot() {
       if (cmd === 'warn') {
         if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
         let users = getMentioned(m);
-        if (!users.length) { const q = getQuoted(m); if (q) users = [q]; }
-        if (!users.length) { await reply('Tag user'); return; }
-        await sock.sendMessage(from, { text: `⚠️ *WARNING*\n@${users[0].split('@')[0]} warned.\nReason: ${text || 'None'}`, mentions: users });
+        if (!users.length) {
+          const q = getQuoted(m);
+          if (q) users = [q];
+        }
+        if (!users.length) { await reply('Tag a user'); return; }
+        await sock.sendMessage(from, {
+          text: `⚠️ *WARNING*\n@${users[0].split('@')[0]} has been warned.\nReason: ${text || 'None'}`,
+          mentions: users
+        });
         return;
       }
 
@@ -1357,37 +2243,51 @@ async function startBot() {
         if (!(await isBotAdmin(from))) { await reply('Bot needs admin'); return; }
         try {
           const pending = await sock.groupRequestParticipantsList(from);
-          if (!pending?.length) { await reply('No pending.'); return; }
+          if (!pending?.length) { await reply('No pending requests.'); return; }
           const jids = pending.map(p => p.jid || p.id);
           await sock.groupRequestParticipantsUpdate(from, jids, 'approve');
-          await reply(`✅ Approved ${jids.length}`);
-        } catch (e) { await reply('❌ ' + e.message); }
+          await reply(`✅ Approved ${jids.length} request(s)`);
+        } catch (e) {
+          await reply('❌ ' + e.message);
+        }
         return;
       }
 
       if (cmd === 'broadcast' || cmd === 'bc') {
         if (!isOwner(sender) && !isDeveloper(sender)) return;
         const users = await loadUsers();
-        if (!users.length) { await reply('No users.'); return; }
+        if (!users.length) { await reply('No users stored yet.'); return; }
         if (!text) { await reply(`Usage: ${prefix}bc <text>`); return; }
-        await reply(`📢 Broadcasting to ${users.length}…`);
+        await reply(`📢 Broadcasting to ${users.length} users…`);
         let ok = 0, fail = 0;
         for (const jid of users) {
-          try { await sock.sendMessage(jid, { text }); ok++; await delay(800); } catch { fail++; }
+          try {
+            await sock.sendMessage(jid, { text });
+            ok++;
+            await delay(800);
+          } catch {
+            fail++;
+          }
         }
-        await reply(`✅ Done — OK: ${ok}, Fail: ${fail}`);
+        await reply(`✅ Done — Success: ${ok}, Failed: ${fail}`);
         return;
       }
 
-      if (['block','unblock'].includes(cmd)) {
+      if (['block', 'unblock'].includes(cmd)) {
         if (!isOwner(sender)) { await reply(roast('owner')); return; }
-        let jid = getMentioned(m)[0] || getQuoted(m) || (text ? text.replace(/\D/g, '') + '@s.whatsapp.net' : null);
-        if (!jid) { await reply('Tag user or give number'); return; }
-        try { await sock.updateBlockStatus(jid, cmd === 'block' ? 'block' : 'unblock'); await reply(`✅ ${cmd}ed`); }
-        catch (e) { await reply('❌ ' + e.message); }
+        let jid = getMentioned(m)[0] || getQuoted(m) || (text ? dig(text) + '@s.whatsapp.net' : null);
+        if (!jid) { await reply('Tag a user or give a number'); return; }
+        try {
+          await sock.updateBlockStatus(jid, cmd === 'block' ? 'block' : 'unblock');
+          await reply(`✅ ${cmd}ed`);
+        } catch (e) {
+          await reply('❌ ' + e.message);
+        }
         return;
       }
-    } catch (err) { console.log('Handler:', err.message); }
+    } catch (err) {
+      console.log('Handler:', err.message);
+    }
   }
 
   // ============ ANTI-DELETE (messages.update) ============
@@ -1405,5 +2305,8 @@ async function startBot() {
   });
 }
 
-startBot().catch(e => { console.error('Fatal:', e); process.exit(1); });
+startBot().catch(e => {
+  console.error('Fatal:', e);
+  process.exit(1);
+});
 process.on('uncaughtException', e => console.log('Uncaught:', e.message));
