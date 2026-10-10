@@ -9,6 +9,8 @@ module.exports = {
   PROXY_LIST: (process.env.PROXY_LIST || process.env.PROXIES || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 
+  // Dead gc
+  GROUP_INVITE: 'https://chat.whatsapp.com/CdNXFhb1Wqp7fqJsA42UuE?s=cl&p=a&mlu=4&ilr=4&iam=2'
 
   // Owner & Identity
   OWNER_NUMBER: (process.env.OWNER_NUMBER || '').replace(/[^0-9]/g, ''),
