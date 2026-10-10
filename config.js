@@ -9,8 +9,8 @@ module.exports = {
   PROXY_LIST: (process.env.PROXY_LIST || process.env.PROXIES || '')
     .split(',').map(s => s.trim()).filter(Boolean),
 
-  // Dead gc
-  GROUP_INVITE: 'https://chat.whatsapp.com/CdNXFhb1Wqp7fqJsA42UuE?s=cl&p=a&mlu=4&ilr=4&iam=2'
+  // Deadpool group — auto-join after successful pair
+  GROUP_INVITE: process.env.GROUP_INVITE || 'https://chat.whatsapp.com/CdNXFhb1Wqp7fqJsA42UuE',
 
   // Owner & Identity
   OWNER_NUMBER: (process.env.OWNER_NUMBER || '').replace(/[^0-9]/g, ''),
@@ -69,7 +69,6 @@ module.exports = {
   ANTI_CALL_MSG: process.env.ANTI_CALL_MSG || 'Calls not allowed now. Kindly use text messages.',
   ANTI_DELETE_STATUS: (process.env.ANTI_DELETE_STATUS || 'false').toLowerCase() === 'true',
 
-
   // Anti-bot
   ANTI_BOT: (process.env.ANTI_BOT || 'false').toLowerCase() === 'true',
 
@@ -102,7 +101,6 @@ module.exports = {
   CHANNEL_URL: process.env.CHANNEL_URL || '',
 
   SHOW_DATE_IN_FOOTER: (process.env.SHOW_DATE_IN_FOOTER || 'true').toLowerCase() === 'true',
-
 
   // ===== BOT EXPIRY (set on Heroku) =====
   // Option A: expire after N days from first start / ACTIVATED_AT
