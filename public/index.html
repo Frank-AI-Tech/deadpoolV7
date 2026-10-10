@@ -61,20 +61,20 @@
       position: absolute;
       top: 10px;
       right: 10px;
-      background: var(--input);
-      border: 1px solid var(--line);
+      background: transparent;
+      border: none;
       color: var(--muted);
-      width: 30px;
-      height: 30px;
-      border-radius: 8px;
+      width: 28px;
+      height: 28px;
       cursor: pointer;
-      font-size: 0.8rem;
+      font-size: 0.95rem;
       display: flex;
       align-items: center;
       justify-content: center;
-      transition: color 0.2s, border-color 0.2s, background 0.2s;
+      transition: color 0.2s;
+      padding: 0;
     }
-    .theme-btn:hover { color: var(--text); border-color: var(--muted); }
+    .theme-btn:hover { color: var(--text); }
     .header { text-align: center; margin-bottom: 12px; padding-top: 2px; }
     .tagline {
       color: #ffffff;
@@ -257,7 +257,7 @@
         <button type="button" id="pauseMusicBtn" class="secondary"><i class="fa-solid fa-pause"></i> Pause</button>
         <button type="button" id="nextMusicBtn" class="secondary"><i class="fa-solid fa-forward"></i> Next</button>
       </div>
-      <div class="music-now" id="musicNow"><i class="fa-solid fa-compact-disc"></i> <span id="trackName">Loading…</span></div>
+      <div class="music-now" id="musicNow"><i class="fa-solid fa-compact-disc"></i> <span id="trackName">Tap Play to start</span></div>
     </div>
 
     <p class="footer">Powered by Confronter<br />
@@ -430,7 +430,7 @@
     };
     document.getElementById('pauseMusicBtn').onclick = () => { audio.pause(); setNow(trackName.textContent, false); };
     document.getElementById('nextMusicBtn').onclick = () => { audio.dataset.retried = ''; loadSong(ti + 1, true); };
-    loadSong(0, false);
+    setNow('Tap Play to start', false);
   </script>
 </body>
 </html>
