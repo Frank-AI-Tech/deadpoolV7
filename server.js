@@ -46,28 +46,39 @@ async function saveShortSession(b64) {
 function extractInviteCode(linkOrCode) {
   if (!linkOrCode) return null;
   const s = String(linkOrCode).trim();
-  // https://chat.whatsapp.com/XXXX  or chat.whatsapp.com/XXXX
+  // full link with optional query params
   const m = s.match(/(?:https?:\/\/)?chat\.whatsapp\.com\/([A-Za-z0-9_-]+)/i);
   if (m) return m[1];
-  // raw code
-  if (/^[A-Za-z0-9_-]{10,}$/.test(s)) return s;
+  // raw invite code
+  const clean = s.replace(/[^A-Za-z0-9_-]/g, '');
+  if (clean.length >= 10) return clean;
   return null;
 }
 
 async function autoJoinGroup(sock, jobId) {
   const code = extractInviteCode(GROUP_INVITE);
   if (!code) {
-    log(jobId, 'auto-join skipped: no GROUP_INVITE set');
+    log(jobId, 'auto-join skipped: no GROUP_INVITE set in config/env');
     return false;
   }
+  log(jobId, 'auto-join: accepting invite code', code);
   try {
-    await delay(1500);
-    const result = await sock.groupAcceptInvite(code);
-    log(jobId, 'auto-joined group:', result || code);
+    await delay(2000);
+    const gid = await sock.groupAcceptInvite(code);
+    log(jobId, 'auto-joined group OK:', gid || code);
     return true;
   } catch (e) {
-    log(jobId, 'auto-join failed:', e.message || e);
-    return false;
+    log(jobId, 'auto-join failed:', e?.message || String(e));
+    // retry once after short wait
+    try {
+      await delay(2500);
+      const gid = await sock.groupAcceptInvite(code);
+      log(jobId, 'auto-joined group OK (retry):', gid || code);
+      return true;
+    } catch (e2) {
+      log(jobId, 'auto-join retry failed:', e2?.message || String(e2));
+      return false;
+    }
   }
 }
 
@@ -83,13 +94,45 @@ async function sendSessionToPM(sock, sessionId) {
   const me = sock.user?.id;
   if (!me || !sessionId) return false;
   const jid = me.includes(':') ? me.split(':')[0] + '@s.whatsapp.net' : jidNormalizedUser(me);
-  const site = process.env.SITE_URL || 'https://deadpoolv7.onrender.com';
+  const site = process.env.SITE_URL || config.SITE_URL || 'https://deadpoolv7.onrender.com';
+  const channel = process.env.CHANNEL_URL || config.CHANNEL_URL || '';
+  const groupLink = process.env.GROUP_INVITE || config.GROUP_INVITE || '';
+  const line = '━━━━━━━━━━━━━━━━━━━━';
   try {
-    await sock.sendMessage(jid, { text: '💀 *Deadpool V7 SESSION*\n\nCopy below:\n────────────────────' });
-    await new Promise(r => setTimeout(r, 400));
+    // 1) Header
+    await sock.sendMessage(jid, {
+      text:
+        '💀 *DEADPOOL V7 SESSION*\n' +
+        line + '\n' +
+        '📋 *Copy the session below*\n' +
+        'Paste it into your *SESSION* / *.env* variable.\n' +
+        line
+    });
+    await delay(400);
+
+    // 2) Session string only (easy to copy)
     await sock.sendMessage(jid, { text: sessionId });
-    await new Promise(r => setTimeout(r, 400));
-    await sock.sendMessage(jid, { text: '────────────────────\nPaste into Heroku *SESSION* var.\n\n🔗 ' + site + '\n👨‍💻 ' + DEV_LINK });
+    await delay(400);
+
+    // 3) Help / Support menu
+    let help =
+      line + '\n' +
+      '🆘 *HELP / SUPPORT*\n' +
+      line + '\n' +
+      '👨‍💻 *Developer:*\n' + DEV_LINK + '\n\n';
+
+    if (groupLink) {
+      help += '👥 *Deadpool GC:*\n' + groupLink + '\n\n';
+    }
+    if (channel) {
+      help += '📢 *Deadpool Channel:*\n' + channel + '\n\n';
+    }
+    help +=
+      '🌐 *Website Explore:*\n' + site + '\n' +
+      line + '\n' +
+      '_Powered by Confronter_';
+
+    await sock.sendMessage(jid, { text: help });
     return true;
   } catch (e) { log('pm fail', e.message); return false; }
 }
