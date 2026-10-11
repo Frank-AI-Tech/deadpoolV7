@@ -40,51 +40,83 @@ const crypto = require('crypto');
 const { exec } = require('child_process');
 const util = require('util');
 
-// ============ CONFIG (edit this or use external config.js) ============
-let config;
-try {
-  config = require('./config');
-} catch {
-  config = {
-    BOT_NAME: 'Deadpool',
-    PREFIX: '.',
-    OWNER_NUMBER: '254700000000',          // change this
-    DEVELOPERS: [],
-    MODE: 'public',                        // public | private
-    SESSION: '',                           // base64 session if any
-    POWERED_BY: 'Powered by Confronter',
-    FONT: 'random',                        // sans | bold | italic | double | script | tiny | random
-    AUTO_VIEW_STATUS: true,
-    AUTO_LIKE_STATUS: true,
-    AUTO_REACT: false,
-    AUTO_READ: true,                       // blue ticks on by default
-    ANTI_DELETE: 'dm',                     // off | dm | chat
-    ANTI_EDIT: 'dm',
-    ANTI_VIEW_ONCE: 'dm',
-    ANTI_CALL: true,
-    ANTI_CALL_MSG: 'Calls are not allowed right now. Please text instead.',
-    ANTILINK: false,
-    WELCOME: true,
-    GOODBYE: true,
-    WELCOME_MSG: 'Welcome @user to *@group*!',
-    GOODBYE_MSG: 'Goodbye @user from *@group*.',
-    PRESENCE: 'unavailable',
-    MENU_MEDIA: '',                        // optional image/gif/mp4 url for menu
-    // Auto-join on connect (leave empty to disable)
-    GROUP_INVITE: '',                      // e.g. "https://chat.whatsapp.com/xxxxx" or just the code
-    CHANNEL_ID: '',                        // e.g. "1203630xxxx@newsletter"
-    // Panel / Pterodactyl (optional)
-    PANEL_DOMAIN: '',
-    PANEL_APIKEY: '',
-    PANEL_CLIENT_APIKEY: '',
-    PANEL_EGG: '15',
-    PANEL_LOCATION: '1',
-    // Expiry (optional)
-    BOT_EXPIRY_DATE: '',
-    BOT_EXPIRY_DAYS: 0,
-    EXPIRY_MSG: '⛔ Bot has expired. Contact the owner.'
-  };
+// ============ CONFIG (config.js + Heroku / process.env) ============
+// OWNER_NUMBER from Heroku Config Vars becomes the bot owner/admin.
+const defaults = {
+  BOT_NAME: 'Deadpool V7',
+  PREFIX: '.',
+  OWNER_NUMBER: '',
+  DEVELOPERS: [],
+  MODE: 'public',
+  SESSION: '',
+  POWERED_BY: 'Powered by Confronter',
+  FONT: 'random',
+  AUTO_VIEW_STATUS: true,
+  AUTO_LIKE_STATUS: true,
+  AUTO_REACT: false,
+  AUTO_READ: false,
+  ANTI_DELETE: 'dm',
+  ANTI_EDIT: 'dm',
+  ANTI_VIEW_ONCE: 'dm',
+  ANTI_CALL: true,
+  ANTI_CALL_MSG: 'Calls are not allowed right now. Please text instead.',
+  ANTILINK: false,
+  WELCOME: true,
+  GOODBYE: true,
+  WELCOME_MSG: 'Welcome @user to *@group*!',
+  GOODBYE_MSG: 'Goodbye @user from *@group*.',
+  PRESENCE: 'unavailable',
+  MENU_MEDIA: '',
+  GROUP_INVITE: '',
+  CHANNEL_ID: '',
+  PANEL_DOMAIN: '',
+  PANEL_APIKEY: '',
+  PANEL_CLIENT_APIKEY: '',
+  PANEL_EGG: '15',
+  PANEL_LOCATION: '1',
+  BOT_EXPIRY_DATE: '',
+  BOT_EXPIRY_DAYS: 0,
+  EXPIRY_MSG: '⛔ Bot has expired. Contact the owner.'
+};
+let fileConfig = {};
+try { fileConfig = require('./config'); } catch {}
+// Env vars (Heroku) override file config
+const env = process.env;
+function envBool(v, def) {
+  if (v === undefined || v === null || v === '') return def;
+  return ['1', 'true', 'yes', 'on'].includes(String(v).toLowerCase());
 }
+const config = {
+  ...defaults,
+  ...fileConfig,
+  BOT_NAME: env.BOT_NAME || fileConfig.BOT_NAME || defaults.BOT_NAME,
+  PREFIX: env.PREFIX || fileConfig.PREFIX || defaults.PREFIX,
+  OWNER_NUMBER: String(env.OWNER_NUMBER || env.OWNER || fileConfig.OWNER_NUMBER || defaults.OWNER_NUMBER).replace(/\D/g, ''),
+  DEVELOPERS: (env.DEVELOPERS || (Array.isArray(fileConfig.DEVELOPERS) ? fileConfig.DEVELOPERS.join(',') : (fileConfig.DEVELOPERS || '')) || '')
+    .split(',').map(s => String(s).replace(/\D/g, '')).filter(Boolean),
+  MODE: (env.MODE || fileConfig.MODE || defaults.MODE).toLowerCase(),
+  SESSION: env.SESSION || env.SESSION_ID || fileConfig.SESSION || defaults.SESSION,
+  FONT: env.FONT || fileConfig.FONT || defaults.FONT,
+  AUTO_VIEW_STATUS: env.AUTO_VIEW_STATUS !== undefined ? envBool(env.AUTO_VIEW_STATUS, true) : (fileConfig.AUTO_VIEW_STATUS ?? defaults.AUTO_VIEW_STATUS),
+  AUTO_LIKE_STATUS: env.AUTO_LIKE_STATUS !== undefined ? envBool(env.AUTO_LIKE_STATUS, true) : (fileConfig.AUTO_LIKE_STATUS ?? defaults.AUTO_LIKE_STATUS),
+  AUTO_REACT: env.AUTO_REACT !== undefined ? envBool(env.AUTO_REACT, false) : (fileConfig.AUTO_REACT ?? defaults.AUTO_REACT),
+  AUTO_READ: env.AUTO_READ !== undefined ? envBool(env.AUTO_READ, false) : (fileConfig.AUTO_READ ?? defaults.AUTO_READ),
+  ANTI_DELETE: env.ANTI_DELETE || fileConfig.ANTI_DELETE || defaults.ANTI_DELETE,
+  ANTI_EDIT: env.ANTI_EDIT || fileConfig.ANTI_EDIT || defaults.ANTI_EDIT,
+  ANTI_VIEW_ONCE: env.ANTI_VIEW_ONCE || fileConfig.ANTI_VIEW_ONCE || defaults.ANTI_VIEW_ONCE,
+  ANTI_CALL: env.ANTI_CALL !== undefined ? envBool(env.ANTI_CALL, true) : (fileConfig.ANTI_CALL ?? defaults.ANTI_CALL),
+  ANTI_CALL_MSG: env.ANTI_CALL_MSG || fileConfig.ANTI_CALL_MSG || defaults.ANTI_CALL_MSG,
+  WELCOME: env.WELCOME !== undefined ? envBool(env.WELCOME, true) : (fileConfig.WELCOME ?? defaults.WELCOME),
+  GOODBYE: env.GOODBYE !== undefined ? envBool(env.GOODBYE, true) : (fileConfig.GOODBYE ?? defaults.GOODBYE),
+  WELCOME_MSG: env.WELCOME_MSG || fileConfig.WELCOME_MSG || defaults.WELCOME_MSG,
+  GOODBYE_MSG: env.GOODBYE_MSG || fileConfig.GOODBYE_MSG || defaults.GOODBYE_MSG,
+  GROUP_INVITE: env.GROUP_INVITE || fileConfig.GROUP_INVITE || defaults.GROUP_INVITE,
+  CHANNEL_ID: env.CHANNEL_ID || fileConfig.CHANNEL_ID || defaults.CHANNEL_ID,
+  MENU_MEDIA: env.MENU_MEDIA || fileConfig.MENU_MEDIA || defaults.MENU_MEDIA,
+  PANEL_DOMAIN: env.PANEL_DOMAIN || fileConfig.PANEL_DOMAIN || defaults.PANEL_DOMAIN,
+  PANEL_APIKEY: env.PANEL_APIKEY || fileConfig.PANEL_APIKEY || defaults.PANEL_APIKEY,
+  POWERED_BY: env.POWERED_BY || fileConfig.POWERED_BY || defaults.POWERED_BY
+};
 
 // ============ NOISE SUPPRESS ============
 const SUPPRESS = [
@@ -314,9 +346,10 @@ function applyFont(text, style) {
 
 function styleReplyText(text) {
   try {
+    if (!text || typeof text !== 'string') return text;
     let style = String(config.FONT || 'random').toLowerCase();
-    if (style === 'random' || style === 'auto') {
-      // cycle through fonts so every reply looks different
+    // Always auto-change on every reply (default). Lock only if user sets a fixed style.
+    if (style === 'random' || style === 'auto' || style === '' || !FONT_MAPS[style]) {
       _lastFontIdx = (_lastFontIdx + 1) % FONT_NAMES.length;
       style = FONT_NAMES[_lastFontIdx];
     }
@@ -362,52 +395,158 @@ function isBotExpired() {
 function buildMainMenu(pushName, userCount) {
   const p = config.PREFIX || '.';
   const exp = getExpiryInfo();
-  const line = '──────────────';
+  // Fixed-width borders so left & right lines stay straight/equal
+  const W = 28;
+  const top = '╔' + '═'.repeat(W) + '╗';
+  const mid = '╠' + '═'.repeat(W) + '╣';
+  const bot = '╚' + '═'.repeat(W) + '╝';
+  const row = (txt) => {
+    const s = String(txt);
+    // pad to W visual width (approx for emoji)
+    const pad = Math.max(0, W - s.length);
+    return '║ ' + s + ' '.repeat(pad) + '║';
+  };
+  // section box like the screenshot
+  const section = (title, cmds) => {
+    let s = '';
+    s += `┌── ${title} ${'─'.repeat(Math.max(0, W - title.length - 5))}┐\n`;
+    for (const c of cmds) s += `│ ${p}${c}\n`;
+    s += `└${'─'.repeat(W)}┘\n`;
+    return s;
+  };
+
   let m = '';
-  m += `╭${line}╮\n`;
-  m += `│ 💀 *${config.BOT_NAME}*\n`;
-  m += `│ 👋 ${pushName || 'User'} · 👥 ${userCount || 0} · ⏳ ${exp}\n`;
-  m += `│ ⚡ Prefix: *${p}*\n`;
-  m += `├${line}┤\n`;
-  m += `│ 📥 *DOWNLOADS*\n`;
-  m += `│ ${p}play ${p}song ${p}video ${p}yt\n`;
-  m += `│ ${p}tiktok ${p}ig ${p}lyrics\n`;
-  m += `├${line}┤\n`;
-  m += `│ 🎨 *STICKER & MEDIA*\n`;
-  m += `│ ${p}sticker ${p}s ${p}toimg ${p}vv\n`;
-  m += `│ ${p}qc ${p}qcstick\n`;
-  m += `├${line}┤\n`;
-  m += `│ 🤖 *AI*  ${p}gpt ${p}ai ${p}ask\n`;
-  m += `├${line}┤\n`;
-  m += `│ 🎮 *GAMES*\n`;
-  m += `│ ${p}family100 ${p}tebak ${p}math\n`;
-  m += `│ ${p}ttt ${p}suit\n`;
-  m += `├${line}┤\n`;
-  m += `│ 👥 *ADMIN*\n`;
-  m += `│ ${p}promote ${p}demote ${p}kick ${p}warn\n`;
-  m += `│ ${p}mute ${p}unmute ${p}tagall ${p}hidetag\n`;
-  m += `│ ${p}antilink ${p}grouplink ${p}groupinfo\n`;
-  m += `│ ${p}approve ${p}left ${p}tagadmins\n`;
-  m += `├${line}┤\n`;
-  m += `│ 👑 *OWNER*\n`;
-  m += `│ ${p}mode ${p}prefix ${p}settings ${p}users\n`;
-  m += `│ ${p}broadcast ${p}block ${p}unblock\n`;
-  m += `│ ${p}autoview ${p}autolike ${p}autoread\n`;
-  m += `│ ${p}antidelete ${p}antiedit ${p}antiviewonce\n`;
-  m += `│ ${p}anticall ${p}welcome ${p}goodbye ${p}font\n`;
-  m += `│ ${p}presence ${p}setbotname ${p}startmsg\n`;
-  m += `├${line}┤\n`;
-  m += `│ 🖥️ *PANEL*  ${p}1gb-5gb ${p}unli ${p}panel\n`;
-  m += `│ ${p}listsrv ${p}listusr ${p}delsrv ${p}delusr\n`;
-  m += `├${line}┤\n`;
-  m += `│ 🖋️ *TEXTMAKER*\n`;
-  m += `│ ${p}neon ${p}fire ${p}glitch ${p}ice ${p}matrix\n`;
-  m += `│ ${p}thunder ${p}hacker ${p}luxury ${p}blackpink\n`;
-  m += `├${line}┤\n`;
-  m += `│ 🎭 *FUN*  ${p}joke ${p}quote ${p}dice ${p}8ball\n`;
-  m += `│ 🔧 *UTIL*  ${p}ping ${p}alive ${p}calc ${p}weather ${p}owner\n`;
-  m += `╰${line}╯\n`;
-  m += `👑 Made by *Confronter* ©${new Date().getFullYear()}`;
+  m += `${top}\n`;
+  m += `║ 💀 *${config.BOT_NAME}*\n`;
+  m += `║ 👋 Hi ${pushName || 'User'}!\n`;
+  m += `║ 👥 Users: ${userCount || 0}\n`;
+  m += `║ ⏳ Active: ${exp}\n`;
+  m += `${bot}\n\n`;
+
+  m += section('📥 DOWNLOADS', [
+    'play <song>',
+    'song <name>',
+    'video <url/name>',
+    'yt <url/name>',
+    'tiktok <url>',
+    'ig <url>',
+    'lyrics <song>'
+  ]);
+  m += '\n';
+  m += section('🎨 STICKER', [
+    'sticker',
+    's',
+    'toimg',
+    'qc <text>',
+    'qcstick <text>',
+    'vv'
+  ]);
+  m += '\n';
+  m += section('🤖 AI', [
+    'gpt <question>',
+    'ai <question>',
+    'ask <question>'
+  ]);
+  m += '\n';
+  m += section('🎮 GAMES', [
+    'family100',
+    'tebak <type>',
+    'math <easy|medium|hard>',
+    'ttt',
+    'suit @user'
+  ]);
+  m += '\n';
+  m += section('👥 ADMIN', [
+    'promote @user',
+    'demote @user',
+    'kick @user',
+    'warn @user',
+    'mute',
+    'unmute',
+    'tagall',
+    'hidetag <text>',
+    'tagadmins',
+    'antilink on/off',
+    'grouplink',
+    'groupinfo',
+    'approve',
+    'left'
+  ]);
+  m += '\n';
+  m += section('👑 OWNER', [
+    'mode public/private',
+    'prefix <symbol>',
+    'settings',
+    'users',
+    'broadcast <text>',
+    'block @user',
+    'unblock @user',
+    'autoview on/off',
+    'autolike on/off',
+    'autoreact on/off',
+    'autoread on/off',
+    'autotyping on/off',
+    'antidelete off/dm/chat',
+    'antiedit off/dm/chat',
+    'antiviewonce off/dm/chat',
+    'anticall on/off',
+    'welcome on/off',
+    'goodbye on/off',
+    'font <style>',
+    'presence <type>',
+    'setbotname <name>',
+    'startmsg'
+  ]);
+  m += '\n';
+  m += section('🖥️ PANEL', [
+    'panel',
+    '1gb user,number',
+    '2gb user,number',
+    '3gb user,number',
+    '4gb user,number',
+    '5gb user,number',
+    'unli user,number',
+    'listsrv',
+    'listusr',
+    'delsrv <id>',
+    'delusr <id>',
+    'ramlist'
+  ]);
+  m += '\n';
+  m += section('🖋️ TEXTMAKER', [
+    'neon <text>',
+    'fire <text>',
+    'glitch <text>',
+    'ice <text>',
+    'matrix <text>',
+    'thunder <text>',
+    'hacker <text>',
+    'luxury <text>',
+    'blackpink <text>',
+    'metallic <text>',
+    'devil <text>',
+    'sand <text>',
+    'light <text>'
+  ]);
+  m += '\n';
+  m += section('🎭 FUN', [
+    'joke',
+    'quote',
+    'dice',
+    '8ball',
+    'coinflip'
+  ]);
+  m += '\n';
+  m += section('🔧 UTILITY', [
+    'ping',
+    'alive',
+    'calc <expr>',
+    'weather <city>',
+    'owner',
+    'delete'
+  ]);
+
+  m += `\n👑 Made by *Confronter* ©${new Date().getFullYear()}`;
   return m;
 }
 
@@ -482,20 +621,27 @@ function buildSyncWaitMessage() {
 
 // ============ AUTH ============
 async function loadAuthState() {
+  // Heroku dynos wipe disk on restart — re-inject SESSION so bot resumes working
   if (config.SESSION && config.SESSION.length > 10) {
     const credsPath = path.join(AUTH_DIR, 'creds.json');
-    if (!(await fs.pathExists(credsPath))) {
+    const exists = await fs.pathExists(credsPath);
+    if (!exists) {
       try {
         let raw = config.SESSION.trim();
-        if (raw.toLowerCase().startsWith('deadpool~')) raw = raw.slice(raw.indexOf('~') + 1).trim();
+        // support prefixes like deadpool~BASE64
+        if (raw.includes('~')) raw = raw.slice(raw.indexOf('~') + 1).trim();
         const creds = JSON.parse(Buffer.from(raw, 'base64').toString('utf-8'));
         await fs.ensureDir(AUTH_DIR);
         await fs.writeJson(credsPath, creds, { spaces: 2 });
-        console.log('✅ Session loaded (first boot only)');
+        console.log('✅ Session restored from SESSION env (dyno restart safe)');
       } catch (e) {
-        console.error('❌ Invalid SESSION:', e.message);
+        console.error('❌ Invalid SESSION env:', e.message);
       }
+    } else {
+      console.log('✅ Session found on disk');
     }
+  } else {
+    console.log('⚠ No SESSION env set — QR login required (not ideal on Heroku)');
   }
   return useMultiFileAuthState(AUTH_DIR);
 }
@@ -524,24 +670,68 @@ function react(jid, key, emoji) {
   sock.sendMessage(jid, { react: { text: emoji, key } }).catch(() => {});
 }
 function getMentioned(m) {
-  return m.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+  const ctx = m.message?.extendedTextMessage?.contextInfo
+    || m.message?.imageMessage?.contextInfo
+    || m.message?.videoMessage?.contextInfo
+    || m.message?.documentMessage?.contextInfo
+    || {};
+  return ctx.mentionedJid || [];
 }
 function getQuoted(m) {
-  return m.message?.extendedTextMessage?.contextInfo?.participant || null;
+  const ctx = m.message?.extendedTextMessage?.contextInfo
+    || m.message?.imageMessage?.contextInfo
+    || m.message?.videoMessage?.contextInfo
+    || m.message?.documentMessage?.contextInfo
+    || {};
+  return ctx.participant || null;
+}
+// Resolve target users: mentions → reply → number in text → (in DM) the chat itself
+function getTargetUsers(m, text, from, isGroupChat) {
+  const users = [];
+  const mentioned = getMentioned(m);
+  for (const j of mentioned) if (j) users.push(j);
+  if (!users.length) {
+    const q = getQuoted(m);
+    if (q) users.push(q);
+  }
+  if (!users.length && text) {
+    // numbers in text
+    const nums = String(text).match(/\d{6,15}/g) || [];
+    for (const n of nums) users.push(n + '@s.whatsapp.net');
+  }
+  // In private chat with no target → use the chat partner
+  if (!users.length && !isGroupChat && from && !from.endsWith('@g.us') && from !== 'status@broadcast') {
+    users.push(from);
+  }
+  // normalize
+  return [...new Set(users.map(j => {
+    if (!j) return null;
+    if (String(j).includes('@')) return j;
+    return dig(j) + '@s.whatsapp.net';
+  }).filter(Boolean))];
 }
 async function getMeta(jid) {
   try { return await sock.groupMetadata(jid); } catch { return null; }
 }
 async function isGroupAdmin(jid, p) {
   const meta = await getMeta(jid);
-  if (!meta) return false;
-  const x = meta.participants.find(y => y.id === p || y.id.split('@')[0] === p.split('@')[0]);
+  if (!meta || !p) return false;
+  const pn = dig(String(p).split('@')[0].split(':')[0]);
+  const x = meta.participants.find(y => {
+    const id = String(y.id || '');
+    const phone = y.phoneNumber ? dig(String(y.phoneNumber).split('@')[0]) : '';
+    return id === p
+      || id.split('@')[0] === String(p).split('@')[0]
+      || (pn && (dig(id.split('@')[0]) === pn || phone === pn));
+  });
   return x?.admin === 'admin' || x?.admin === 'superadmin';
 }
 async function isBotAdmin(jid) {
   const b = sock.user?.id;
   if (!b) return false;
-  return isGroupAdmin(jid, jidNormalizedUser(b));
+  const botJid = jidNormalizedUser(b);
+  // also try raw id (LID groups)
+  return (await isGroupAdmin(jid, botJid)) || (await isGroupAdmin(jid, b));
 }
 function hasLink(t) {
   return /(https?:\/\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)/gi.test(t || '');
@@ -685,75 +875,301 @@ async function autoJoinConfigured() {
   }
 }
 
-// ============ SIMPLE DOWNLOADER STUBS (replace with your real modules) ============
-// You already have downloader.js and apis.js in the original working bot.
-// These are safe fallbacks so the file runs even without them.
+// ============ WORKING DOWNLOADER (music + video) ============
+// Tries local ./downloader first, then multiple public APIs so music always works.
+
+function isYoutubeUrl(s) {
+  return /(?:youtube\.com|youtu\.be)\//i.test(String(s || ''));
+}
+
+async function searchYoutube(query) {
+  // 1) try yt-search if installed
+  try {
+    const yts = require('yt-search');
+    const r = await yts(query);
+    const v = r?.videos?.[0];
+    if (v?.url) return { url: v.url, title: v.title, thumbnail: v.thumbnail, duration: v.timestamp };
+  } catch {}
+  // 2) public search API
+  try {
+    const r = await dlGet('https://api.siputzx.my.id/api/s/youtube?query=' + encodeURIComponent(query), { timeout: 20000 });
+    const arr = r?.data?.data || r?.data?.result || [];
+    const v = Array.isArray(arr) ? arr[0] : null;
+    if (v) {
+      return {
+        url: v.url || v.link || ('https://www.youtube.com/watch?v=' + (v.videoId || v.id)),
+        title: v.title || v.name || query,
+        thumbnail: v.thumbnail || v.thumb || v.image
+      };
+    }
+  } catch {}
+  // 3) another public search
+  try {
+    const r = await dlGet('https://yt-api.p.rapidapi.com/search?query=' + encodeURIComponent(query), {
+      timeout: 15000,
+      headers: { 'X-RapidAPI-Key': process.env.RAPIDAPI_KEY || '' }
+    });
+    const v = r?.data?.data?.[0];
+    if (v?.videoId) {
+      return {
+        url: 'https://www.youtube.com/watch?v=' + v.videoId,
+        title: v.title || query,
+        thumbnail: v.thumbnail?.[0]?.url
+      };
+    }
+  } catch {}
+  return null;
+}
+
+async function downloadViaCobalt(url, audioOnly) {
+  try {
+    const r = await axios.post('https://api.cobalt.tools/api/json', {
+      url,
+      aFormat: 'mp3',
+      isAudioOnly: !!audioOnly,
+      filenamePattern: 'basic'
+    }, {
+      timeout: 45000,
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': UA
+      }
+    });
+    const d = r.data;
+    if (d?.status === 'stream' || d?.status === 'redirect' || d?.url) {
+      const mediaUrl = d.url || d.audio || d.stream;
+      if (mediaUrl) {
+        const buf = await fetchBuffer(mediaUrl, 120000);
+        return { buffer: buf, title: d.filename || 'media', url: mediaUrl };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+async function downloadViaSiputzx(url, audioOnly) {
+  try {
+    const endpoint = audioOnly
+      ? 'https://api.siputzx.my.id/api/d/ytmp3?url=' + encodeURIComponent(url)
+      : 'https://api.siputzx.my.id/api/d/ytmp4?url=' + encodeURIComponent(url);
+    const r = await dlGet(endpoint, { timeout: 60000 });
+    const d = r?.data?.data || r?.data?.result || r?.data;
+    const mediaUrl = d?.dl || d?.download || d?.url || d?.link || d?.audio || d?.video;
+    const title = d?.title || d?.name || 'YouTube';
+    if (mediaUrl) {
+      const buf = await fetchBuffer(String(mediaUrl), 120000);
+      if (buf && buf.length > 1000) return { buffer: buf, title, url: mediaUrl };
+    }
+  } catch {}
+  return null;
+}
+
+async function downloadViaYtdl(url, audioOnly) {
+  try {
+    let ytdl;
+    try { ytdl = require('@distube/ytdl-core'); } catch { ytdl = require('ytdl-core'); }
+    const info = await ytdl.getInfo(url);
+    const title = info?.videoDetails?.title || 'YouTube';
+    const format = audioOnly
+      ? ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' })
+      : ytdl.chooseFormat(info.formats, { quality: '18' }) || ytdl.chooseFormat(info.formats, { quality: 'lowest' });
+    if (!format?.url) return null;
+    const buf = await fetchBuffer(format.url, 120000);
+    if (buf && buf.length > 1000) return { buffer: buf, title, url: format.url };
+  } catch {}
+  return null;
+}
+
 async function downloadYouTube(query, audioOnly = true) {
+  // Prefer local module if user has one
   try {
     const { downloadYouTube: real } = require('./downloader');
-    return await real(query, audioOnly);
-  } catch {
-    return null;
+    const r = await real(query, audioOnly);
+    if (r?.buffer) return r;
+  } catch {}
+
+  let url = isYoutubeUrl(query) ? query.trim() : null;
+  let title = query;
+
+  if (!url) {
+    const found = await searchYoutube(query);
+    if (!found?.url) return null;
+    url = found.url;
+    title = found.title || query;
   }
+
+  // Try multiple download backends
+  let data = await downloadViaCobalt(url, audioOnly);
+  if (!data?.buffer) data = await downloadViaSiputzx(url, audioOnly);
+  if (!data?.buffer) data = await downloadViaYtdl(url, audioOnly);
+
+  if (data?.buffer) {
+    data.title = data.title || title;
+    return data;
+  }
+  return null;
 }
+
 async function sendAsMp3(sock, jid, data) {
   try {
     const { sendAsMp3: real } = require('./downloader');
     return await real(sock, jid, data);
-  } catch {
-    if (data?.buffer) {
-      await sock.sendMessage(jid, { audio: data.buffer, mimetype: 'audio/mpeg' });
-      return true;
+  } catch {}
+  if (!data?.buffer) return false;
+  try {
+    await sock.sendMessage(jid, {
+      audio: data.buffer,
+      mimetype: 'audio/mpeg',
+      fileName: (data.title || 'audio').replace(/[^\w\s\-]/g, '').slice(0, 60) + '.mp3',
+      ptt: false
+    });
+    // optional caption
+    if (data.title) {
+      await sock.sendMessage(jid, { text: `🎵 *${data.title}*` }).catch(() => {});
     }
+    return true;
+  } catch (e) {
+    console.log('sendAsMp3:', e.message);
     return false;
   }
 }
+
 async function sendAsVideo(sock, jid, data) {
   try {
     const { sendAsVideo: real } = require('./downloader');
     return await real(sock, jid, data);
-  } catch {
-    if (data?.buffer) {
-      await sock.sendMessage(jid, { video: data.buffer, mimetype: 'video/mp4', caption: data.title || '' });
-      return true;
-    }
+  } catch {}
+  if (!data?.buffer) return false;
+  try {
+    await sock.sendMessage(jid, {
+      video: data.buffer,
+      mimetype: 'video/mp4',
+      caption: data.title ? `🎬 *${data.title}*` : undefined
+    });
+    return true;
+  } catch (e) {
+    console.log('sendAsVideo:', e.message);
     return false;
   }
 }
+
 async function askAI(text) {
   try {
     const { askAI: real } = require('./apis');
     return await real(text);
-  } catch {
-    return null;
-  }
+  } catch {}
+  // simple public fallback
+  try {
+    const r = await axios.post('https://api.siputzx.my.id/api/ai/gpt', { content: text }, {
+      timeout: 45000,
+      headers: { 'Content-Type': 'application/json', 'User-Agent': UA }
+    });
+    const ans = r?.data?.data || r?.data?.result || r?.data?.message || r?.data?.response;
+    if (typeof ans === 'string' && ans.trim()) return ans.trim();
+  } catch {}
+  return null;
 }
+
 async function getLyrics(text) {
   try {
     const { getLyrics: real } = require('./apis');
     return await real(text);
-  } catch {
-    return null;
-  }
+  } catch {}
+  try {
+    const r = await dlGet('https://api.siputzx.my.id/api/s/lyrics?query=' + encodeURIComponent(text), { timeout: 20000 });
+    const d = r?.data?.data || r?.data?.result || r?.data;
+    if (d?.lyrics || d?.lyric) {
+      return { title: d.title || text, artist: d.artist || d.author || '', lyrics: d.lyrics || d.lyric };
+    }
+  } catch {}
+  return null;
 }
+
 async function generateTextImage(effect, text) {
+  // Prefer local apis.js if present
   try {
     const { generateTextImage: real } = require('./apis');
-    return await real(effect, text);
-  } catch {
-    return null;
+    const buf = await real(effect, text);
+    if (buf && Buffer.isBuffer(buf) && buf.length > 500) return buf;
+  } catch {}
+
+  const q = String(text || '').slice(0, 40);
+  const style = String(effect || 'neon').toLowerCase();
+
+  // Photo360 / ephoto360 style effect URLs (text effects like the KEITH neon look)
+  const endpoints = [
+    // siputzx canvas / textpro
+    `https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=${encodeURIComponent(style)}`,
+    // alternative textpro style paths used by many bots
+    `https://api.siputzx.my.id/api/ephoto/${encodeURIComponent(style)}?text=${encodeURIComponent(q)}`,
+    `https://api.siputzx.my.id/api/photooxy/${encodeURIComponent(style)}?text=${encodeURIComponent(q)}`,
+    // popcat text effects (works for some styles)
+    `https://api.popcat.xyz/${encodeURIComponent(style)}?text=${encodeURIComponent(q)}`,
+    // some public ephoto mirrors
+    `https://api.lolhuman.xyz/api/ephoto1/${encodeURIComponent(style)}?apikey=GataDios&text=${encodeURIComponent(q)}`
+  ];
+
+  // style-specific known good endpoints (Photo360-like)
+  const styleUrls = {
+    neon: [
+      `https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=neon`,
+      `https://api.popcat.xyz/outrank?text=${encodeURIComponent(q)}`
+    ],
+    hacker: [
+      `https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=hacker`,
+      `https://api.siputzx.my.id/api/ephoto/hacker?text=${encodeURIComponent(q)}`
+    ],
+    fire: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=fire`],
+    glitch: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=glitch`],
+    matrix: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=matrix`],
+    thunder: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=thunder`],
+    blackpink: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=blackpink`],
+    luxury: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=luxury`],
+    metallic: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=metallic`],
+    ice: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=ice`],
+    devil: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=devil`],
+    sand: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=sand`],
+    light: [`https://api.siputzx.my.id/api/canvas/textpro?text=${encodeURIComponent(q)}&style=light`]
+  };
+
+  const tryList = [...(styleUrls[style] || []), ...endpoints];
+
+  for (const url of tryList) {
+    try {
+      const r = await dlGet(url, { responseType: 'arraybuffer', timeout: 40000 });
+      if (r.status >= 400 || !r.data) continue;
+      const buf = Buffer.from(r.data);
+      // skip tiny / html error pages
+      if (buf.length < 800) continue;
+      const head = buf.slice(0, 20).toString('utf8').toLowerCase();
+      if (head.includes('<!doctype') || head.includes('<html') || head.includes('{')) continue;
+      return buf;
+    } catch {}
   }
+  return null;
 }
 
 // ============ MAIN BOT ============
 async function startBot() {
   await ensureData();
   if (typeof config.AUTO_READ === 'undefined') config.AUTO_READ = false;
-  if (typeof config.FONT === 'undefined') config.FONT = 'sans';
+  if (typeof config.FONT === 'undefined') config.FONT = 'random';
+  // Force auto-changing fonts unless user locked a style with .font
+  if (!config.FONT || config.FONT === 'sans' || config.FONT === 'mono') config.FONT = 'random';
 
-  console.log('\n╔══════════════════════════════════════╗');
+  console.log('');
+  console.log('╔══════════════════════════════════════╗');
   console.log(`║     ${String(config.BOT_NAME).padEnd(28)} ║`);
-  console.log('╚══════════════════════════════════════╝\n');
+  console.log('║  Deadpool still ruling the nation    ║');
+  console.log('║  Made by Confronter                  ║');
+  console.log('║  We defeated the weak                ║');
+  console.log('║  Confronter Techwizard               ║');
+  console.log('╚══════════════════════════════════════╝');
+  console.log(`👤 Owner : ${config.OWNER_NUMBER || '(not set — set OWNER_NUMBER in Heroku)'}`);
+  console.log(`⚡ Prefix: ${config.PREFIX}`);
+  console.log(`🌐 Mode  : ${config.MODE}`);
+  console.log('');
 
   const { state, saveCreds } = await loadAuthState();
   const { version } = await fetchLatestBaileysVersion();
@@ -871,25 +1287,60 @@ async function startBot() {
       const { id, participants, action } = u;
       const meta = await getMeta(id);
       const gname = meta?.subject || 'Group';
+      // Learn LID → phone from group metadata
       try {
         for (const p of meta?.participants || []) {
           if (p.id?.includes('@lid') && p.phoneNumber) {
-            _lidMap.set(p.id.split('@')[0], String(p.phoneNumber).split('@')[0]);
+            _lidMap.set(p.id.split('@')[0], String(p.phoneNumber).split('@')[0].replace(/\D/g, ''));
+          }
+          if (p.id && !String(p.id).includes('@lid')) {
+            const ph = String(p.id).split('@')[0].split(':')[0];
+            if (/^\d{6,15}$/.test(ph)) _lidMap.set(ph, ph);
           }
         }
       } catch {}
+
       for (const p of participants) {
-        const label = mentionLabel(p);
+        // Resolve a mentionable number for this participant
+        let phone = jidToPhone(p, null);
+        if (phone === 'unknown' || phone === 'hidden') {
+          // try from metadata entry
+          const entry = (meta?.participants || []).find(x => x.id === p || String(x.id).split('@')[0] === String(p).split('@')[0]);
+          if (entry?.phoneNumber) phone = String(entry.phoneNumber).split('@')[0].replace(/\D/g, '');
+          else if (entry?.id && !String(entry.id).includes('@lid')) phone = String(entry.id).split('@')[0].split(':')[0];
+        }
+        if (!phone || phone === 'unknown' || phone === 'hidden') {
+          const rawId = String(p).split('@')[0].split(':')[0];
+          if (/^\d{6,15}$/.test(rawId)) phone = rawId;
+        }
+        // WhatsApp needs @number in text + jid in mentions array
+        const tag = (phone && /^\d{6,15}$/.test(phone)) ? ('@' + phone) : '@user';
+        const mentionJid = (phone && /^\d{6,15}$/.test(phone))
+          ? (phone + '@s.whatsapp.net')
+          : p;
+
         if (action === 'add' && config.WELCOME) {
-          const raw = (config.WELCOME_MSG || 'Welcome @user to *@group*!').replace(/@user/gi, label).replace(/@group/gi, gname);
-          await sock.sendMessage(id, { text: styleReplyText(raw), mentions: label.startsWith('@') ? [p] : [] });
+          const raw = (config.WELCOME_MSG || 'Welcome @user to *@group*!')
+            .replace(/@user/gi, tag)
+            .replace(/@group/gi, gname);
+          await sock.sendMessage(id, {
+            text: styleReplyText(raw),
+            mentions: [mentionJid, p].filter(Boolean)
+          });
         }
         if ((action === 'remove' || action === 'leave') && config.GOODBYE) {
-          const raw = (config.GOODBYE_MSG || 'Goodbye @user from *@group*.').replace(/@user/gi, label).replace(/@group/gi, gname);
-          await sock.sendMessage(id, { text: styleReplyText(raw), mentions: label.startsWith('@') ? [p] : [] });
+          const raw = (config.GOODBYE_MSG || 'Goodbye @user from *@group*.')
+            .replace(/@user/gi, tag)
+            .replace(/@group/gi, gname);
+          await sock.sendMessage(id, {
+            text: styleReplyText(raw),
+            mentions: [mentionJid, p].filter(Boolean)
+          });
         }
       }
-    } catch {}
+    } catch (e) {
+      console.log('welcome/goodbye:', e.message);
+    }
   });
 
   // ============ MESSAGES ============
@@ -2159,18 +2610,25 @@ async function startBot() {
       }
 
       if (['promote', 'demote', 'kick'].includes(cmd)) {
-        if (!(await isBotAdmin(from))) { await reply('❌ Bot needs to be admin.'); return; }
+        if (!isGroup(from)) { await reply(roast('group')); return; }
+        if (!(await isBotAdmin(from))) { await reply('❌ Bot needs to be admin first.'); return; }
         if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
-        let users = getMentioned(m);
+        const users = getTargetUsers(m, text, from, true);
         if (!users.length) {
-          const q = getQuoted(m);
-          if (q) users = [q];
+          await reply(`Tag a user, reply to their message, or give a number.\nExample:\n${prefix}${cmd} @user\nOr reply to their message with ${prefix}${cmd}`);
+          return;
         }
-        if (!users.length && /^\d{6,15}$/.test(dig(text))) users = [dig(text) + '@s.whatsapp.net'];
-        if (!users.length) { await reply('Tag or reply to a user.'); return; }
         const action = cmd === 'promote' ? 'promote' : cmd === 'demote' ? 'demote' : 'remove';
-        await sock.groupParticipantsUpdate(from, users, action);
-        await reply(`✅ ${cmd} done.`);
+        try {
+          await sock.groupParticipantsUpdate(from, users, action);
+          const labels = users.map(u => '@' + (jidToPhone(u, m) !== 'unknown' ? jidToPhone(u, m) : String(u).split('@')[0]));
+          await sock.sendMessage(from, {
+            text: styleReplyText(`✅ *${cmd.toUpperCase()}*\n${labels.join(', ')} ${cmd === 'kick' ? 'removed' : cmd + 'd'}.`),
+            mentions: users
+          });
+        } catch (e) {
+          await reply(`❌ Failed to ${cmd}: ${e.message || e}`);
+        }
         return;
       }
 
@@ -2222,15 +2680,15 @@ async function startBot() {
       }
 
       if (cmd === 'warn') {
+        if (!isGroup(from)) { await reply(roast('group')); return; }
         if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
-        let users = getMentioned(m);
-        if (!users.length) {
-          const q = getQuoted(m);
-          if (q) users = [q];
-        }
-        if (!users.length) { await reply('Tag a user'); return; }
+        const users = getTargetUsers(m, text, from, true);
+        if (!users.length) { await reply(`Tag a user or reply to their message.\nExample: ${prefix}warn @user spam`); return; }
+        // reason = text without numbers/mentions
+        const reason = (text || 'None').replace(/@\d+/g, '').replace(/\d{6,15}/g, '').trim() || 'None';
+        const label = jidToPhone(users[0], m);
         await sock.sendMessage(from, {
-          text: `⚠️ *WARNING*\n@${users[0].split('@')[0]} has been warned.\nReason: ${text || 'None'}`,
+          text: styleReplyText(`⚠️ *WARNING*\n@${label !== 'unknown' ? label : users[0].split('@')[0]} has been warned.\nReason: ${reason}`),
           mentions: users
         });
         return;
@@ -2280,15 +2738,30 @@ async function startBot() {
       }
 
       if (['block', 'unblock'].includes(cmd)) {
-        if (!isOwner(sender)) { await reply(roast('owner')); return; }
-        let jid = getMentioned(m)[0] || getQuoted(m) || (text ? dig(text) + '@s.whatsapp.net' : null);
-        if (!jid) { await reply('Tag a user or give a number'); return; }
-        try {
-          await sock.updateBlockStatus(jid, cmd === 'block' ? 'block' : 'unblock');
-          await reply(`✅ ${cmd}ed`);
-        } catch (e) {
-          await reply('❌ ' + e.message);
+        if (!isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
+        // In DM: .block alone blocks that chat user
+        // In group: tag, reply, or number
+        const targets = getTargetUsers(m, text, from, isGroup(from));
+        if (!targets.length) {
+          await reply(`Usage:\n• In DM: ${prefix}${cmd}\n• In group: ${prefix}${cmd} @user  or reply to their message\n• Or: ${prefix}${cmd} 2547xxxxxxx`);
+          return;
         }
+        let ok = 0, fail = 0;
+        for (const jid of targets) {
+          try {
+            // Prefer phone jid for block API
+            let blockJid = jid;
+            const phone = jidToPhone(jid, m);
+            if (phone && phone !== 'unknown') blockJid = phone + '@s.whatsapp.net';
+            await sock.updateBlockStatus(blockJid, cmd === 'block' ? 'block' : 'unblock');
+            ok++;
+          } catch (e) {
+            console.log(cmd + ' error:', e.message);
+            fail++;
+          }
+        }
+        if (ok) await reply(`✅ ${cmd}ed ${ok} user(s)${fail ? ` (${fail} failed)` : ''}`);
+        else await reply(`❌ Could not ${cmd} user. Try with number: ${prefix}${cmd} 2547xxxxxxx`);
         return;
       }
     } catch (err) {
