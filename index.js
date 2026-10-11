@@ -53,16 +53,16 @@ try {
     MODE: 'public',                        // public | private
     SESSION: '',                           // base64 session if any
     POWERED_BY: 'Powered by Confronter',
-    FONT: 'sans',                          // sans | bold | mono | random | etc.
+    FONT: 'random',                        // sans | bold | italic | double | script | tiny | random
     AUTO_VIEW_STATUS: true,
     AUTO_LIKE_STATUS: true,
     AUTO_REACT: false,
-    AUTO_READ: false,
-    ANTI_DELETE: 'pm',                     // off | pm | chat
-    ANTI_EDIT: 'pm',
-    ANTI_VIEW_ONCE: 'pm',
+    AUTO_READ: true,                       // blue ticks on by default
+    ANTI_DELETE: 'dm',                     // off | dm | chat
+    ANTI_EDIT: 'dm',
+    ANTI_VIEW_ONCE: 'dm',
     ANTI_CALL: true,
-    ANTI_CALL_MSG: 'Calls are not allowed right now.',
+    ANTI_CALL_MSG: 'Calls are not allowed right now. Please text instead.',
     ANTILINK: false,
     WELCOME: true,
     GOODBYE: true,
@@ -150,16 +150,29 @@ function cacheLid(key, msg) {
   } catch {}
 }
 function jidToPhone(jid, msg) {
-  if (!jid) return 'hidden';
+  if (!jid) return 'unknown';
   const raw = String(jid);
-  const alt = msg?.key?.participantAlt || msg?.key?.remoteJidAlt;
+  // Prefer explicit alt fields first
+  const alt = msg?.key?.participantAlt || msg?.key?.remoteJidAlt || msg?.participantAlt || msg?.remoteJidAlt;
   if (alt && !String(alt).includes('@lid')) {
     const n = String(alt).split('@')[0].split(':')[0];
     if (/^\d{6,15}$/.test(n)) return n;
   }
-  if (raw.includes('@lid')) return _lidMap.get(raw.split('@')[0]) || 'hidden';
+  // Cached LID → phone
+  if (raw.includes('@lid')) {
+    const lid = raw.split('@')[0];
+    const cached = _lidMap.get(lid);
+    if (cached) return cached;
+    // last resort: try participant from msg
+    const p = msg?.key?.participant || msg?.participant;
+    if (p && !String(p).includes('@lid')) {
+      const n = String(p).split('@')[0].split(':')[0];
+      if (/^\d{6,15}$/.test(n)) return n;
+    }
+    return 'unknown';
+  }
   const n = raw.split('@')[0].split(':')[0];
-  return /^\d{6,15}$/.test(n) ? n : 'hidden';
+  return /^\d{6,15}$/.test(n) ? n : 'unknown';
 }
 function mentionLabel(jid) {
   if (!jid) return 'someone';
@@ -248,13 +261,6 @@ const FONT_MAPS = {
     N:'𝗡',O:'𝗢',P:'𝗣',Q:'𝗤',R:'𝗥',S:'𝗦',T:'𝗧',U:'𝗨',V:'𝗩',W:'𝗪',X:'𝗫',Y:'𝗬',Z:'𝗭',
     '0':'𝟬','1':'𝟭','2':'𝟮','3':'𝟯','4':'𝟰','5':'𝟱','6':'𝟲','7':'𝟳','8':'𝟴','9':'𝟵'
   },
-  mono: {
-    a:'𝚊',b:'𝚋',c:'𝚌',d:'𝚍',e:'𝚎',f:'𝚏',g:'𝚐',h:'𝚑',i:'𝚒',j:'𝚓',k:'𝚔',l:'𝚕',m:'𝚖',
-    n:'𝚗',o:'𝚘',p:'𝚙',q:'𝚚',r:'𝚛',s:'𝚜',t:'𝚝',u:'𝚞',v:'𝚟',w:'𝚠',x:'𝚡',y:'𝚢',z:'𝚣',
-    A:'𝙰',B:'𝙱',C:'𝙲',D:'𝙳',E:'𝙴',F:'𝙵',G:'𝙶',H:'𝙷',I:'𝙸',J:'𝙹',K:'𝙺',L:'𝙻',M:'𝙼',
-    N:'𝙽',O:'𝙾',P:'𝙿',Q:'𝚀',R:'𝚁',S:'𝚂',T:'𝚃',U:'𝚄',V:'𝚅',W:'𝚆',X:'𝚇',Y:'𝚈',Z:'𝚉',
-    '0':'𝟶','1':'𝟷','2':'𝟸','3':'𝟹','4':'𝟺','5':'𝟻','6':'𝟼','7':'𝟽','8':'𝟾','9':'𝟿'
-  },
   italic: {
     a:'𝑎',b:'𝑏',c:'𝑐',d:'𝑑',e:'𝑒',f:'𝑓',g:'𝑔',h:'ℎ',i:'𝑖',j:'𝑗',k:'𝑘',l:'𝑙',m:'𝑚',
     n:'𝑛',o:'𝑜',p:'𝑝',q:'𝑞',r:'𝑟',s:'𝑠',t:'𝑡',u:'𝑢',v:'𝑣',w:'𝑤',x:'𝑥',y:'𝑦',z:'𝑧',
@@ -279,9 +285,23 @@ const FONT_MAPS = {
     n:'ɴ',o:'ᴏ',p:'ᴘ',q:'ǫ',r:'ʀ',s:'s',t:'ᴛ',u:'ᴜ',v:'ᴠ',w:'ᴡ',x:'x',y:'ʏ',z:'ᴢ',
     A:'ᴀ',B:'ʙ',C:'ᴄ',D:'ᴅ',E:'ᴇ',F:'ғ',G:'ɢ',H:'ʜ',I:'ɪ',J:'ᴊ',K:'ᴋ',L:'ʟ',M:'ᴍ',
     N:'ɴ',O:'ᴏ',P:'ᴘ',Q:'ǫ',R:'ʀ',S:'s',T:'ᴛ',U:'ᴜ',V:'ᴠ',W:'ᴡ',X:'x',Y:'ʏ',Z:'ᴢ'
+  },
+  // Fancy styles from keyboard apps
+  gothic: {
+    a:'𝔞',b:'𝔟',c:'𝔠',d:'𝔡',e:'𝔢',f:'𝔣',g:'𝔤',h:'𝔥',i:'𝔦',j:'𝔧',k:'𝔨',l:'𝔩',m:'𝔪',
+    n:'𝔫',o:'𝔬',p:'𝔭',q:'𝔮',r:'𝔯',s:'𝔰',t:'𝔱',u:'𝔲',v:'𝔳',w:'𝔴',x:'𝔵',y:'𝔶',z:'𝔷',
+    A:'𝔄',B:'𝔅',C:'ℭ',D:'𝔇',E:'𝔈',F:'𝔉',G:'𝔊',H:'ℌ',I:'ℑ',J:'𝔍',K:'𝔎',L:'𝔏',M:'𝔐',
+    N:'𝔑',O:'𝔒',P:'𝔓',Q:'𝔔',R:'ℜ',S:'𝔖',T:'𝔗',U:'𝔘',V:'𝔙',W:'𝔚',X:'𝔛',Y:'𝔜',Z:'ℨ'
+  },
+  bubble: {
+    a:'ⓐ',b:'ⓑ',c:'ⓒ',d:'ⓓ',e:'ⓔ',f:'ⓕ',g:'ⓖ',h:'ⓗ',i:'ⓘ',j:'ⓙ',k:'ⓚ',l:'ⓛ',m:'ⓜ',
+    n:'ⓝ',o:'ⓞ',p:'ⓟ',q:'ⓠ',r:'ⓡ',s:'ⓢ',t:'ⓣ',u:'ⓤ',v:'ⓥ',w:'ⓦ',x:'ⓧ',y:'ⓨ',z:'ⓩ',
+    A:'Ⓐ',B:'Ⓑ',C:'Ⓒ',D:'Ⓓ',E:'Ⓔ',F:'Ⓕ',G:'Ⓖ',H:'Ⓗ',I:'Ⓘ',J:'Ⓙ',K:'Ⓚ',L:'Ⓛ',M:'Ⓜ',
+    N:'Ⓝ',O:'Ⓞ',P:'Ⓟ',Q:'Ⓠ',R:'Ⓡ',S:'Ⓢ',T:'Ⓣ',U:'Ⓤ',V:'Ⓥ',W:'Ⓦ',X:'Ⓧ',Y:'Ⓨ',Z:'Ⓩ'
   }
 };
-const FONT_NAMES = Object.keys(FONT_MAPS);
+const FONT_NAMES = Object.keys(FONT_MAPS).filter(n => n !== 'normal');
+let _lastFontIdx = 0;
 
 function applyFont(text, style) {
   if (!text || typeof text !== 'string') return text;
@@ -294,12 +314,13 @@ function applyFont(text, style) {
 
 function styleReplyText(text) {
   try {
-    let style = String(config.FONT || 'sans').toLowerCase();
+    let style = String(config.FONT || 'random').toLowerCase();
     if (style === 'random' || style === 'auto') {
-      const pool = FONT_NAMES.filter(n => n !== 'normal');
-      style = pool[Math.floor(Math.random() * pool.length)];
+      // cycle through fonts so every reply looks different
+      _lastFontIdx = (_lastFontIdx + 1) % FONT_NAMES.length;
+      style = FONT_NAMES[_lastFontIdx];
     }
-    if (style === 'off' || style === 'normal') return text;
+    if (style === 'off' || style === 'normal' || style === 'mono') return text;
     return applyFont(text, style);
   } catch {
     return text;
@@ -341,107 +362,52 @@ function isBotExpired() {
 function buildMainMenu(pushName, userCount) {
   const p = config.PREFIX || '.';
   const exp = getExpiryInfo();
-
+  const line = '──────────────';
   let m = '';
-  m += `💀 *${config.BOT_NAME}*\n`;
-  m += `👋 ${pushName || 'User'}  ·  👥 ${userCount || 0}  ·  ⏳ ${exp}\n`;
-  m += `⚡ Prefix: *${p}*\n\n`;
-
-  const block = (title, lines) => {
-    return `*${title}*\n\`\`\`\n${lines.map(c => p + c).join('\n')}\n\`\`\`\n`;
-  };
-
-  m += block('📥 DOWNLOADS', [
-    'play <song>',
-    'song <name>',
-    'video <url/name>',
-    'yt <url/name>',
-    'tiktok <url>',
-    'ig <url>',
-    'lyrics <song>'
-  ]);
-  m += block('🎨 STICKER & MEDIA', [
-    'sticker  (reply media)',
-    's  (reply media)',
-    'toimg  (reply sticker)',
-    'qc <text>  (quote image)',
-    'qcstick <text>',
-    'vv  (viewonce → owner PM)'
-  ]);
-  m += block('🤖 AI', [
-    'gpt <question>',
-    'ai <question>',
-    'ask <question>'
-  ]);
-  m += block('🎮 GAMES', [
-    'family100',
-    'tebak lagu|gambar|kata|kalimat|lirik|lontong',
-    'math <easy|medium|hard>',
-    'ttt / tictactoe',
-    'suit @user'
-  ]);
-  m += block('👥 ADMIN', [
-    'promote @user',
-    'demote @user',
-    'kick @user',
-    'warn @user',
-    'mute',
-    'unmute',
-    'tagall',
-    'hidetag <text>',
-    'tagadmins',
-    'antilink on/off',
-    'grouplink',
-    'groupinfo',
-    'approve',
-    'left'
-  ]);
-  m += block('👑 OWNER', [
-    'mode public/private',
-    'prefix <symbol>',
-    'settings',
-    'users',
-    'broadcast <text>',
-    'block @user',
-    'unblock @user',
-    'autoview on/off',
-    'autolike on/off',
-    'autoreact on/off',
-    'autoread on/off',
-    'autotyping on/off',
-    'font sans|bold|mono|random',
-    'antidelete off/pm/chat',
-    'antiedit off/pm/chat',
-    'antiviewonce off/pm/chat',
-    'anticall on/off',
-    'welcome on/off',
-    'goodbye on/off',
-    'presence typing|recording|online|offline',
-    'setbotname <name>',
-    'startmsg'
-  ]);
-  m += block('🖥️ PANEL (Owner)', [
-    'panel',
-    '1gb|2gb|3gb|4gb|5gb|unli user,number',
-    'listsrv',
-    'listusr',
-    'delsrv <id>',
-    'delusr <id>',
-    'addusr email,user,name,number',
-    'addsrv ...',
-    'listadmin',
-    'ramlist'
-  ]);
-  m += block('🖋️ TEXTMAKER', [
-    'neon <text>', 'fire <text>', 'glitch <text>', 'ice <text>',
-    'matrix <text>', 'thunder <text>', 'devil <text>', 'sand <text>',
-    'metallic <text>', 'blackpink <text>', 'light <text>',
-    'hacker <text>', 'luxury <text>'
-  ]);
-  m += block('🎭 FUN', ['joke', 'quote', 'dice', '8ball', 'coinflip']);
-  m += block('🔧 UTILITY', ['ping', 'alive', 'calc <expr>', 'weather <city>', 'owner', 'delete']);
-
-  m += `〽️ *Made by Confronter* ©${new Date().getFullYear()}`;
+  m += `╭${line}╮\n`;
+  m += `│ 💀 *${config.BOT_NAME}*\n`;
+  m += `│ 👋 ${pushName || 'User'} · 👥 ${userCount || 0} · ⏳ ${exp}\n`;
+  m += `│ ⚡ Prefix: *${p}*\n`;
+  m += `├${line}┤\n`;
+  m += `│ 📥 *DOWNLOADS*\n`;
+  m += `│ ${p}play ${p}song ${p}video ${p}yt\n`;
+  m += `│ ${p}tiktok ${p}ig ${p}lyrics\n`;
+  m += `├${line}┤\n`;
+  m += `│ 🎨 *STICKER & MEDIA*\n`;
+  m += `│ ${p}sticker ${p}s ${p}toimg ${p}vv\n`;
+  m += `│ ${p}qc ${p}qcstick\n`;
+  m += `├${line}┤\n`;
+  m += `│ 🤖 *AI*  ${p}gpt ${p}ai ${p}ask\n`;
+  m += `├${line}┤\n`;
+  m += `│ 🎮 *GAMES*\n`;
+  m += `│ ${p}family100 ${p}tebak ${p}math\n`;
+  m += `│ ${p}ttt ${p}suit\n`;
+  m += `├${line}┤\n`;
+  m += `│ 👥 *ADMIN*\n`;
+  m += `│ ${p}promote ${p}demote ${p}kick ${p}warn\n`;
+  m += `│ ${p}mute ${p}unmute ${p}tagall ${p}hidetag\n`;
+  m += `│ ${p}antilink ${p}grouplink ${p}groupinfo\n`;
+  m += `│ ${p}approve ${p}left ${p}tagadmins\n`;
+  m += `├${line}┤\n`;
+  m += `│ 👑 *OWNER*\n`;
+  m += `│ ${p}mode ${p}prefix ${p}settings ${p}users\n`;
+  m += `│ ${p}broadcast ${p}block ${p}unblock\n`;
+  m += `│ ${p}autoview ${p}autolike ${p}autoread\n`;
+  m += `│ ${p}antidelete ${p}antiedit ${p}antiviewonce\n`;
+  m += `│ ${p}anticall ${p}welcome ${p}goodbye ${p}font\n`;
+  m += `│ ${p}presence ${p}setbotname ${p}startmsg\n`;
+  m += `├${line}┤\n`;
+  m += `│ 🖥️ *PANEL*  ${p}1gb-5gb ${p}unli ${p}panel\n`;
+  m += `│ ${p}listsrv ${p}listusr ${p}delsrv ${p}delusr\n`;
+  m += `├${line}┤\n`;
+  m += `│ 🖋️ *TEXTMAKER*\n`;
+  m += `│ ${p}neon ${p}fire ${p}glitch ${p}ice ${p}matrix\n`;
+  m += `│ ${p}thunder ${p}hacker ${p}luxury ${p}blackpink\n`;
+  m += `├${line}┤\n`;
+  m += `│ 🎭 *FUN*  ${p}joke ${p}quote ${p}dice ${p}8ball\n`;
+  m += `│ 🔧 *UTIL*  ${p}ping ${p}alive ${p}calc ${p}weather ${p}owner\n`;
+  m += `╰${line}╯\n`;
+  m += `👑 Made by *Confronter* ©${new Date().getFullYear()}`;
   return m;
 }
 
@@ -475,7 +441,7 @@ async function sendMenuWithMedia(jid, pushName, userCount) {
 // ============ START MESSAGE ============
 function buildStartMessage() {
   const p = config.PREFIX || '.';
-  const on = v => (v === true || v === 'on' || v === 'pm' || v === 'chat') ? '✅' : '❌';
+  const on = v => (v === true || v === 'on' || v === 'dm' || v === 'chat' || v === 'pm') ? '✅' : '❌';
   const val = (v, fallback = '—') => (v === undefined || v === null || v === '') ? fallback : String(v);
   const exp = getExpiryInfo();
   const line = '──────────────';
@@ -505,6 +471,13 @@ function buildStartMessage() {
   m += `│ 💬 Type *${p}menu* for commands\n`;
   m += `╰${line}╯`;
   return m;
+}
+
+function buildSyncWaitMessage() {
+  return `⏳ *Please wait 1–2 minutes…*\n\n` +
+    `Bot is syncing sessions & keys.\n` +
+    `After that it will respond to all commands normally.\n\n` +
+    `_Do not spam commands while syncing._`;
 }
 
 // ============ AUTH ============
@@ -646,7 +619,7 @@ async function forwardDelete(key, cached) {
     }
     let cap = `✅ *${config.BOT_NAME} antiDelete*\n`;
     cap += `• Deleted by: +${phone}\n`;
-    cap += `• Chat: ${isStatus ? 'Status' : (isGroup(from) ? 'Group: ' + groupName : 'Private')}\n`;
+    cap += `• Chat: ${isStatus ? 'Status' : (isGroup(from) ? 'Group: ' + groupName : 'DM')}\n`;
     if (deletedText && !deletedText.startsWith('[')) cap += `\n📝 *Deleted Text:*\n${deletedText}`;
     else if (deletedText) cap += `\n${deletedText}`;
     const media = { imageMessage: 'image', videoMessage: 'video', audioMessage: 'audio', stickerMessage: 'sticker', documentMessage: 'document' };
@@ -800,10 +773,18 @@ async function startBot() {
     keepAliveIntervalMs: 10000,
     emitOwnEvents: true,
     fireInitQueries: true,
-    msgRetryCounterCache: new NodeCache(),
+    msgRetryCounterCache: new NodeCache({ stdTTL: 600, checkperiod: 120 }),
+    // Critical for reducing "Waiting for this message"
     getMessage: async (key) => {
-      const c = msgCache.get(key.id);
-      return c?.message || undefined;
+      try {
+        if (!key?.id) return undefined;
+        const c = msgCache.get(key.id);
+        if (c?.message) return c.message;
+        // minimal stub so Baileys can still decrypt retries
+        return { conversation: '' };
+      } catch {
+        return { conversation: '' };
+      }
     }
   });
 
@@ -846,6 +827,9 @@ async function startBot() {
           const jid = me.includes(':') ? me.split(':')[0] + '@s.whatsapp.net' : jidNormalizedUser(me);
           await sock.sendMessage(jid, { text: buildStartMessage() });
           console.log('📩 Start message sent');
+          // Tell owner to wait while bot finishes key sync
+          await delay(1500);
+          await sock.sendMessage(jid, { text: buildSyncWaitMessage() });
         } catch (e) {
           console.log('start send:', e.message);
         }
@@ -870,10 +854,13 @@ async function startBot() {
       if (call.status === 'offer') {
         try {
           await sock.rejectCall(call.id, call.from);
+          const msg = config.ANTI_CALL_MSG || 'Calls are not allowed right now. Please text instead.';
           await sock.sendMessage(call.from, {
-            text: `📞 *${config.BOT_NAME}*\n\n${config.ANTI_CALL_MSG || 'Calls are not allowed right now.'}`
+            text: `📞 *${config.BOT_NAME}*\n\n${msg}`
           }).catch(() => {});
-        } catch {}
+        } catch (e) {
+          console.log('anticall:', e.message);
+        }
       }
     }
   });
@@ -965,6 +952,13 @@ async function startBot() {
       const sender = m.key.participant || m.key.remoteJid;
       const isMe = !!m.key.fromMe;
 
+      // Presence on EVERY incoming user message (not only commands)
+      if (!isMe && from && from !== 'status@broadcast') {
+        const pm = presenceMap(config.PRESENCE) || 'composing';
+        sock.sendPresenceUpdate(pm, from).catch(() => {});
+      }
+
+      // Blue ticks (read receipts)
       if (config.AUTO_READ && !isMe && from && from !== 'status@broadcast') {
         sock.readMessages([m.key]).catch(() => {});
       }
@@ -990,7 +984,7 @@ async function startBot() {
             if (target) {
               const who = jidToPhone(key.participant || from, m);
               sock.sendMessage(target, {
-                text: `✅ *${config.BOT_NAME} antiEdit*\n• Edited by: +${who}\n• Chat: ${isGroup(from) ? 'Group' : 'Private'}\n\n📝 *Before:*\n${oldText}\n\n✏️ *After:*\n${newText || '[media]'}`
+                text: `✅ *${config.BOT_NAME} antiEdit*\n• Edited by: +${who}\n• Chat: ${isGroup(from) ? 'Group' : 'DM'}\n\n📝 *Before:*\n${oldText}\n\n✏️ *After:*\n${newText || '[media]'}`
               }).catch(() => {});
             }
           } catch {}
@@ -1045,11 +1039,11 @@ async function startBot() {
               || m.message;
             const mode = String(config.ANTI_VIEW_ONCE).toLowerCase();
             const me = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
-            const target = (mode === 'pm' || mode === 'private') ? (getOwnerJid() || me || from) : from;
+            const target = (mode === 'dm' || mode === 'pm' || mode === 'private') ? (getOwnerJid() || me || from) : from;
             let dl = await downloadMediaMsg(voMsg);
             if (!dl) dl = await downloadMediaMsg(m.message);
             const phone = jidToPhone(sender, m);
-            const head = `🔓 *antiViewOnce*\n• From: +${phone}\n• Chat: ${isGroup(from) ? 'Group' : 'Private'}`;
+            const head = `🔓 *antiViewOnce*\n• From: +${phone}\n• Chat: ${isGroup(from) ? 'Group' : 'DM'}`;
             if (dl?.buffer) {
               if (dl.type === 'imageMessage') await sock.sendMessage(target, { image: dl.buffer, caption: head });
               else if (dl.type === 'videoMessage') await sock.sendMessage(target, { video: dl.buffer, caption: head, mimetype: 'video/mp4' });
@@ -1153,7 +1147,8 @@ async function startBot() {
       if (cmd === 'ping') {
         const t0 = Date.now();
         try { await sock.sendPresenceUpdate('composing', from); } catch {}
-        await reply(`⚡ *Pong!*\n> Speed: *${Date.now() - t0}ms*`);
+        const speed = Date.now() - t0;
+        await reply(`⚡ *${config.BOT_NAME}* pinging…\n> Speed: *${speed}ms*`);
         return;
       }
 
@@ -1401,7 +1396,7 @@ async function startBot() {
           if (!dl?.buffer) { await reply('❌ Could not download view-once.'); return; }
 
           const phone = jidToPhone(sender, m);
-          const head = `🔓 *ViewOnce*\n• From: +${phone}\n• Chat: ${isGroup(from) ? 'Group' : 'Private'}`;
+          const head = `🔓 *ViewOnce*\n• From: +${phone}\n• Chat: ${isGroup(from) ? 'Group' : 'DM'}`;
 
           if (dl.type === 'imageMessage') {
             await sock.sendMessage(target, { image: dl.buffer, caption: head });
@@ -1487,8 +1482,16 @@ async function startBot() {
       if (cmd === 'weather') {
         if (!text) { await reply(`Usage: ${prefix}weather Nairobi`); return; }
         try {
-          const r = await dlGet('https://wttr.in/' + encodeURIComponent(text) + '?format=3');
-          await reply(`🌤️ ${String(r.data).trim()}`);
+          const r = await dlGet('https://wttr.in/' + encodeURIComponent(text) + '?format=3', {
+            headers: { 'User-Agent': 'curl/7.68.0', Accept: 'text/plain' }
+          });
+          const body = String(r.data || '').trim();
+          // Avoid HTML pages
+          if (!body || body.startsWith('<!') || body.includes('<html')) {
+            await reply('❌ Weather service returned invalid data. Try again later.');
+            return;
+          }
+          await reply(`🌤️ ${body}`);
         } catch {
           await reply('❌ Weather unavailable');
         }
@@ -1767,9 +1770,9 @@ async function startBot() {
       }
       if (cmd === 'font') {
         const v = String(args[0] || '').toLowerCase();
-        const allowed = ['normal', 'sans', 'bold', 'mono', 'italic', 'double', 'script', 'tiny', 'random', 'off'];
+        const allowed = ['normal', 'sans', 'bold', 'italic', 'double', 'script', 'tiny', 'gothic', 'bubble', 'random', 'off'];
         if (!v) {
-          await reply(`Font: *${config.FONT || 'sans'}*\nOptions: ${allowed.join(', ')}\nUsage: ${prefix}font sans`);
+          await reply(`Font: *${config.FONT || 'random'}*\nOptions: ${allowed.join(', ')}\nUsage: ${prefix}font random`);
           return;
         }
         if (!allowed.includes(v)) {
@@ -1777,7 +1780,8 @@ async function startBot() {
           return;
         }
         config.FONT = v === 'off' ? 'normal' : v;
-        const sample = applyFont('Hello Confronter 123', config.FONT === 'random' ? 'sans' : config.FONT);
+        const sampleStyle = config.FONT === 'random' ? 'sans' : config.FONT;
+        const sample = applyFont('Hello Confronter 123', sampleStyle);
         await reply(`✅ Font → *${config.FONT}*\nPreview: ${sample}`);
         return;
       }
@@ -1812,28 +1816,30 @@ async function startBot() {
         return;
       }
       if (cmd === 'antidelete') {
-        const v = (args[0] || '').toLowerCase();
-        if (['off', 'pm', 'chat'].includes(v)) {
+        let v = (args[0] || '').toLowerCase();
+        if (v === 'pm') v = 'dm';
+        if (['off', 'dm', 'chat'].includes(v)) {
           config.ANTI_DELETE = v;
           await reply(`✅ AntiDelete → *${v}*`);
-        } else await reply(`AntiDelete: *${config.ANTI_DELETE}*`);
+        } else await reply(`AntiDelete: *${config.ANTI_DELETE}*\nUsage: ${prefix}antidelete off/dm/chat`);
         return;
       }
       if (cmd === 'antiedit') {
-        const v = (args[0] || '').toLowerCase();
-        if (['off', 'pm', 'chat'].includes(v)) {
+        let v = (args[0] || '').toLowerCase();
+        if (v === 'pm') v = 'dm';
+        if (['off', 'dm', 'chat'].includes(v)) {
           config.ANTI_EDIT = v;
           await reply(`✅ AntiEdit → *${v}*`);
-        } else await reply(`AntiEdit: *${config.ANTI_EDIT}*`);
+        } else await reply(`AntiEdit: *${config.ANTI_EDIT}*\nUsage: ${prefix}antiedit off/dm/chat`);
         return;
       }
       if (cmd === 'antiviewonce') {
         let v = (args[0] || '').toLowerCase();
-        if (v === 'private') v = 'pm';
-        if (['off', 'pm', 'chat'].includes(v)) {
+        if (v === 'private' || v === 'pm') v = 'dm';
+        if (['off', 'dm', 'chat'].includes(v)) {
           config.ANTI_VIEW_ONCE = v;
           await reply(`✅ AntiViewOnce → *${v}*`);
-        } else await reply(`AntiViewOnce: *${config.ANTI_VIEW_ONCE}*`);
+        } else await reply(`AntiViewOnce: *${config.ANTI_VIEW_ONCE}*\nUsage: ${prefix}antiviewonce off/dm/chat`);
         return;
       }
       if (cmd === 'welcome') {
