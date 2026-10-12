@@ -39,6 +39,40 @@ const { Sticker, StickerTypes } = require('wa-sticker-formatter');
 const crypto = require('crypto');
 const { exec } = require('child_process');
 const util = require('util');
+const dashboardDb = require('./supabase');
+
+async function processDashboardBroadcasts(sock) {
+  if (!dashboardDb.ready() || sock.__dashboardWorker) return;
+  sock.__dashboardWorker = true;
+  const tick = async () => {
+    try {
+      const jobs = await dashboardDb.pendingBroadcasts();
+      for (const job of jobs || []) {
+        await dashboardDb.updateBroadcast(job.id, { status: 'sending' });
+        const users = await dashboardDb.listUsers();
+        let delivered = 0, failed = 0;
+        for (const user of users || []) {
+          try {
+            const jid = user.jid;
+            let content;
+            if (job.content_type === 'text') content = { text: job.body || '' };
+            else {
+              const media = await axios.get(job.media_url, { responseType: 'arraybuffer', timeout: 60000, maxContentLength: 100 * 1024 * 1024 });
+              const key = job.content_type === 'document' ? 'document' : job.content_type;
+              content = { [key]: Buffer.from(media.data), caption: job.caption || '' };
+              if (key === 'document') content.fileName = 'broadcast';
+            }
+            await sock.sendMessage(jid, content);
+            delivered++;
+          } catch { failed++; }
+        }
+        await dashboardDb.updateBroadcast(job.id, { status: failed && !delivered ? 'failed' : 'completed', delivered_count: delivered, failed_count: failed, completed_at: new Date().toISOString() });
+      }
+    } catch (e) { console.log('[v0] broadcast worker:', e.message); }
+    setTimeout(tick, 5000);
+  };
+  tick();
+}
 
 // ============ CONFIG (config.js + Heroku / process.env) ============
 // OWNER_NUMBER from Heroku Config Vars becomes the bot owner/admin.
@@ -670,7 +704,7 @@ function getOwnerJid() {
   return numbers.some(num => configured.some(owner => num === owner || num.endsWith(owner) || owner.endsWith(num)));
   }
 const isDeveloper = isOwner;
-const DEFAULT_STATUS_LIKES = ['❤️', '🔥', '😂', '👍', '😍', '💯', '🙏', '😮', '���', '👏', '🎉', '✨', '💜', '🤍', '🖤', '💙', '💚', '💛', '🧡', '🤝'];
+const DEFAULT_STATUS_LIKES = ['❤️', '🔥', '😂', '👍', '😍', '💯', '🙏', '😮', '����', '👏', '🎉', '✨', '💜', '🤍', '🖤', '💙', '💚', '💛', '🧡', '🤝'];
 const DEFAULT_REACT_EMOJIS = ['👍', '❤️', '🔥', '😂', '🙏', '💯', '😍', '😮', '👏', '✨', '🎉', '💜', '🤝', '👀', '🫡', '🤩'];
 const DEFAULT_CMD_EMOJIS = ['✅', '⚡', '🔥', '💫', '✨', '🎯', '👍', '🤖', '💜', '🚀', '⭐', '💀', '👑'];
 function randEmoji(pool, fb) {
@@ -1280,8 +1314,9 @@ async function startBot() {
   // ============ CONNECTION ============
   sock.ev.on('connection.update', async (u) => {
     const { connection, lastDisconnect } = u;
-    if (connection === 'open') {
-      console.log(`✅ ${config.BOT_NAME} ONLINE`);
+  if (connection === 'open') {
+  processDashboardBroadcasts(sock);
+  console.log(`✅ ${config.BOT_NAME} ONLINE`);
       console.log(`👤 Owner     : ${config.OWNER_NUMBER}`);
       console.log(`🌐 Mode      : ${config.MODE}\n`);
 
@@ -1456,6 +1491,9 @@ async function startBot() {
       const from = m.key.remoteJid;
       const sender = m.key.participant || m.key.remoteJid;
       const isMe = !!m.key.fromMe;
+      if (!isMe && from && from !== 'status@broadcast') {
+        dashboardDb.upsertUser({ jid: sender, phone: String(sender).split('@')[0].split(':')[0], display_name: m.pushName || null, push_name: m.pushName || null, last_chat_type: from.endsWith('@g.us') ? 'group' : 'dm', last_seen_at: new Date().toISOString(), is_active: true }).catch(() => {});
+      }
 
       // Presence on EVERY incoming user message (not only commands)
       if (!isMe && from && from !== 'status@broadcast') {

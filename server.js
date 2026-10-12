@@ -374,6 +374,32 @@ app.get('/api/music/stream/:index', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+function dashboardAuthed(req) { return req.headers.cookie?.split(';').some(v => v.trim() === 'deadpool_dashboard=1'); }
+app.get('/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'public', 'dashboard.html')));
+app.post('/api/dashboard/login', (req, res) => {
+  if (!process.env.DASHBOARD_PASSWORD || req.body.password !== process.env.DASHBOARD_PASSWORD) return res.status(401).json({ error: 'Invalid password' });
+  res.setHeader('Set-Cookie', 'deadpool_dashboard=1; HttpOnly; SameSite=Lax; Path=/; Max-Age=86400');
+  res.json({ ok: true });
+});
+app.get('/api/dashboard/users', async (req, res) => {
+  if (!dashboardAuthed(req)) return res.status(401).json({ error: 'Unauthorized' });
+  try { const users = await require('./supabase').listUsers(); res.json({ users }); }
+  catch (e) { res.status(503).json({ error: e.message }); }
+});
+app.post('/api/dashboard/broadcast', async (req, res) => {
+  if (!dashboardAuthed(req)) return res.status(401).json({ error: 'Unauthorized' });
+  const { contentType = 'text', body = '', mediaUrl = '', caption = '' } = req.body || {};
+  if (!['text','image','audio','video','document'].includes(contentType)) return res.status(400).json({ error: 'Unsupported content type' });
+  if (contentType === 'text' && !String(body).trim()) return res.status(400).json({ error: 'Message text required' });
+  if (contentType !== 'text' && !String(mediaUrl).trim()) return res.status(400).json({ error: 'Media URL required' });
+  try {
+    const db = require('./supabase');
+    const users = await db.listUsers();
+    const rows = await db.createBroadcast({ content_type: contentType, body: String(body), media_url: String(mediaUrl), caption: String(caption), recipient_count: users.length, status: 'queued' });
+    res.json({ ok: true, id: rows?.[0]?.id, recipientCount: users.length });
+  } catch (e) { res.status(503).json({ error: e.message }); }
+});
+
 app.get('/health', (req, res) => res.json({ ok: true, active: jobs.size }));
 
 app.listen(PORT, () => log(`Deadpool V7 Pair :${PORT} | code=${PAIR_CODE}`));
