@@ -117,6 +117,13 @@ const config = {
   PANEL_APIKEY: env.PANEL_APIKEY || fileConfig.PANEL_APIKEY || defaults.PANEL_APIKEY,
   POWERED_BY: env.POWERED_BY || fileConfig.POWERED_BY || defaults.POWERED_BY
 };
+// Normalize legacy "pm" → "dm"
+for (const k of ['ANTI_DELETE', 'ANTI_EDIT', 'ANTI_VIEW_ONCE']) {
+  if (String(config[k]).toLowerCase() === 'pm' || String(config[k]).toLowerCase() === 'private') config[k] = 'dm';
+}
+// Default emoji pools if not set in config
+if (!config.STATUS_LIKES) config.STATUS_LIKES = null;
+if (!config.REACT_EMOJIS) config.REACT_EMOJIS = null;
 
 // ============ NOISE SUPPRESS ============
 const SUPPRESS = [
@@ -395,23 +402,21 @@ function isBotExpired() {
 function buildMainMenu(pushName, userCount) {
   const p = config.PREFIX || '.';
   const exp = getExpiryInfo();
-  // Fixed-width borders so left & right lines stay straight/equal
-  const W = 28;
+  // Equal-width borders (opening line = closing line)
+  const W = 26;
+  const bar = '─'.repeat(W);
   const top = '╔' + '═'.repeat(W) + '╗';
-  const mid = '╠' + '═'.repeat(W) + '╣';
   const bot = '╚' + '═'.repeat(W) + '╝';
-  const row = (txt) => {
-    const s = String(txt);
-    // pad to W visual width (approx for emoji)
-    const pad = Math.max(0, W - s.length);
-    return '║ ' + s + ' '.repeat(pad) + '║';
-  };
-  // section box like the screenshot
   const section = (title, cmds) => {
+    // title line + fill dashes so total width matches closing bar
+    const label = ` ${title} `;
+    const fill = Math.max(0, W - label.length - 2);
+    const left = Math.floor(fill / 2);
+    const right = fill - left;
     let s = '';
-    s += `┌── ${title} ${'─'.repeat(Math.max(0, W - title.length - 5))}┐\n`;
+    s += `┌${'─'.repeat(left)}┤${label}├${'─'.repeat(right)}┐\n`;
     for (const c of cmds) s += `│ ${p}${c}\n`;
-    s += `└${'─'.repeat(W)}┘\n`;
+    s += `└${bar}┘\n`;
     return s;
   };
 
@@ -551,7 +556,8 @@ function buildMainMenu(pushName, userCount) {
 }
 
 async function sendMenuWithMedia(jid, pushName, userCount) {
-  const caption = buildMainMenu(pushName, userCount);
+  let caption = buildMainMenu(pushName, userCount);
+  try { caption = styleReplyText(caption); } catch {}
   const mediaUrl = config.MENU_MEDIA;
   if (!mediaUrl) {
     await sock.sendMessage(jid, { text: caption });
@@ -659,13 +665,16 @@ function isOwner(jid) {
   return list.some(o => num === o || num.endsWith(o) || o.endsWith(num));
 }
 const isDeveloper = isOwner;
+const DEFAULT_STATUS_LIKES = ['❤️', '🔥', '😂', '👍', '😍', '💯', '🙏', '😮', '😢', '👏', '🎉', '✨', '💜', '🤍', '🖤', '💙', '💚', '💛', '🧡', '🤝'];
+const DEFAULT_REACT_EMOJIS = ['👍', '❤️', '🔥', '😂', '🙏', '💯', '😍', '😮', '👏', '✨', '🎉', '💜', '🤝', '👀', '🫡', '🤩'];
+const DEFAULT_CMD_EMOJIS = ['✅', '⚡', '🔥', '💫', '✨', '🎯', '👍', '🤖', '💜', '🚀', '⭐', '💀', '👑'];
 function randEmoji(pool, fb) {
-  const list = (pool && pool.length) ? pool : (fb || ['👍', '❤️', '🔥', '😂', '🙏', '💯', '😍']);
+  const list = (Array.isArray(pool) && pool.length) ? pool : (fb || DEFAULT_REACT_EMOJIS);
   return list[Math.floor(Math.random() * list.length)] || '👍';
 }
-const statusLikeEmoji = () => randEmoji(config.STATUS_LIKES);
-const msgReactEmoji = () => randEmoji(config.REACT_EMOJIS);
-const cmdReactEmoji = () => randEmoji(null, ['✅', '⚡', '🔥', '💫', '✨', '🎯', '👍', '🤖', '💜', '🚀', '⭐']);
+const statusLikeEmoji = () => randEmoji(config.STATUS_LIKES || DEFAULT_STATUS_LIKES, DEFAULT_STATUS_LIKES);
+const msgReactEmoji = () => randEmoji(config.REACT_EMOJIS || DEFAULT_REACT_EMOJIS, DEFAULT_REACT_EMOJIS);
+const cmdReactEmoji = () => randEmoji(null, DEFAULT_CMD_EMOJIS);
 function react(jid, key, emoji) {
   sock.sendMessage(jid, { react: { text: emoji, key } }).catch(() => {});
 }
@@ -716,22 +725,45 @@ async function getMeta(jid) {
 async function isGroupAdmin(jid, p) {
   const meta = await getMeta(jid);
   if (!meta || !p) return false;
-  const pn = dig(String(p).split('@')[0].split(':')[0]);
+  const rawP = String(p);
+  const pn = dig(rawP.split('@')[0].split(':')[0]);
   const x = meta.participants.find(y => {
     const id = String(y.id || '');
+    const lid = String(y.lid || y.id || '');
     const phone = y.phoneNumber ? dig(String(y.phoneNumber).split('@')[0]) : '';
+    const idNum = dig(id.split('@')[0].split(':')[0]);
     return id === p
-      || id.split('@')[0] === String(p).split('@')[0]
-      || (pn && (dig(id.split('@')[0]) === pn || phone === pn));
+      || lid === p
+      || id.split('@')[0] === rawP.split('@')[0]
+      || (pn && (idNum === pn || phone === pn))
+      || (pn && id.includes(pn));
   });
   return x?.admin === 'admin' || x?.admin === 'superadmin';
 }
 async function isBotAdmin(jid) {
-  const b = sock.user?.id;
-  if (!b) return false;
-  const botJid = jidNormalizedUser(b);
-  // also try raw id (LID groups)
-  return (await isGroupAdmin(jid, botJid)) || (await isGroupAdmin(jid, b));
+  try {
+    const meta = await getMeta(jid);
+    if (!meta) return false;
+    const botId = sock.user?.id;
+    if (!botId) return false;
+    const botNorm = jidNormalizedUser(botId);
+    const botNum = dig(botNorm.split('@')[0].split(':')[0]);
+    // Also match bot LID if present
+    const botLid = sock.user?.lid || null;
+    const me = meta.participants.find(y => {
+      const id = String(y.id || '');
+      const phone = y.phoneNumber ? dig(String(y.phoneNumber).split('@')[0]) : '';
+      const idNum = dig(id.split('@')[0].split(':')[0]);
+      return id === botId
+        || id === botNorm
+        || (botLid && (id === botLid || String(y.lid) === botLid))
+        || (botNum && (idNum === botNum || phone === botNum))
+        || (botNum && id.includes(botNum));
+    });
+    return me?.admin === 'admin' || me?.admin === 'superadmin';
+  } catch {
+    return false;
+  }
 }
 function hasLink(t) {
   return /(https?:\/\/[^\s]+)|(chat\.whatsapp\.com\/[^\s]+)/gi.test(t || '');
@@ -794,7 +826,16 @@ async function forwardDelete(key, cached) {
         if (msg[t]) { type = t; break; }
       }
     }
-    const phone = jidToPhone(key.participant || cached.participant, cached);
+    let phone = jidToPhone(key.participant || cached.participant || cached.participantAlt, cached);
+    if (phone === 'unknown' || phone === 'hidden') {
+      phone = jidToPhone(from, cached);
+    }
+    if ((phone === 'unknown' || phone === 'hidden') && config.OWNER_NUMBER) {
+      // self-chat / owner DM fallback
+      if (String(from).includes(config.OWNER_NUMBER) || String(key.participant || '').includes(config.OWNER_NUMBER)) {
+        phone = config.OWNER_NUMBER;
+      }
+    }
     let deletedText = '';
     if (type === 'conversation') deletedText = msg.conversation || '';
     else if (type === 'extendedTextMessage') deletedText = msg.extendedTextMessage?.text || '';
@@ -803,9 +844,9 @@ async function forwardDelete(key, cached) {
     else if (type === 'documentMessage') deletedText = msg.documentMessage?.fileName || '';
     else if (type === 'stickerMessage') deletedText = '[Sticker]';
     else if (type === 'audioMessage') deletedText = msg.audioMessage?.ptt ? '[Voice]' : '[Audio]';
-    let groupName = 'Private';
+    let groupName = 'DM';
     if (isGroup(from)) {
-      try { groupName = (await sock.groupMetadata(from))?.subject || 'Group'; } catch {}
+      try { groupName = (await sock.groupMetadata(from))?.subject || 'Group'; } catch { groupName = 'Group'; }
     }
     let cap = `✅ *${config.BOT_NAME} antiDelete*\n`;
     cap += `• Deleted by: +${phone}\n`;
@@ -1196,10 +1237,10 @@ async function startBot() {
         if (!key?.id) return undefined;
         const c = msgCache.get(key.id);
         if (c?.message) return c.message;
-        // minimal stub so Baileys can still decrypt retries
-        return { conversation: '' };
+        // Return undefined (not empty stub) so Baileys retries properly from server
+        return undefined;
       } catch {
-        return { conversation: '' };
+        return undefined;
       }
     }
   });
@@ -1433,7 +1474,9 @@ async function startBot() {
             const oldText = cached?.message?.conversation || cached?.message?.extendedTextMessage?.text || '[unknown]';
             const target = config.ANTI_EDIT === 'chat' ? from : getOwnerJid();
             if (target) {
-              const who = jidToPhone(key.participant || from, m);
+              let who = jidToPhone(key.participant || from, m);
+              if (who === 'unknown' || who === 'hidden') who = jidToPhone(from, m);
+              if ((who === 'unknown' || who === 'hidden') && config.OWNER_NUMBER) who = config.OWNER_NUMBER;
               sock.sendMessage(target, {
                 text: `✅ *${config.BOT_NAME} antiEdit*\n• Edited by: +${who}\n• Chat: ${isGroup(from) ? 'Group' : 'DM'}\n\n📝 *Before:*\n${oldText}\n\n✏️ *After:*\n${newText || '[media]'}`
               }).catch(() => {});
@@ -1445,33 +1488,46 @@ async function startBot() {
 
       if (!isMe && from && !from.includes('status')) saveUser(sender).catch(() => {});
 
-      // STATUS handling
+      // STATUS handling — view + like immediately
       if (from === 'status@broadcast' || m.key?.remoteJidAlt === 'status@broadcast') {
         if (isMe) return;
-        const rawP = m.key.participant || m.participant || m.key.participantAlt || '';
+        const rawP = m.key.participant || m.participant || m.key.participantAlt || m.key.remoteJidAlt || '';
         let poster = rawP;
-        if (String(rawP).includes('@lid')) {
-          const phone = jidToPhone(rawP, m);
-          if (phone && phone !== 'hidden') poster = phone + '@s.whatsapp.net';
+        const phone = jidToPhone(rawP, m);
+        if (phone && phone !== 'unknown' && phone !== 'hidden') {
+          poster = phone + '@s.whatsapp.net';
+        } else if (rawP && !String(rawP).includes('@lid') && !String(rawP).includes('status')) {
+          poster = String(rawP).includes('@') ? rawP : (dig(rawP) + '@s.whatsapp.net');
         }
         const statusKey = {
           remoteJid: 'status@broadcast',
           id: m.key.id,
-          participant: poster || m.key.participant,
+          participant: poster || m.key.participant || rawP,
           fromMe: false
         };
+        // Auto-view ASAP (blue ticks on status)
         if (config.AUTO_VIEW_STATUS) {
-          sock.readMessages([statusKey]).catch(() => {
-            sock.readMessages([m.key]).catch(() => {});
-          });
+          Promise.resolve()
+            .then(() => sock.readMessages([statusKey]))
+            .catch(() => sock.readMessages([m.key]).catch(() => {}));
         }
+        // Auto-like with random emoji
         if (config.AUTO_LIKE_STATUS) {
           const emoji = statusLikeEmoji();
           if (emoji) {
             const botJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
-            const list = [...new Set([poster, rawP, botJid].filter(Boolean))];
-            sock.sendMessage('status@broadcast', { react: { text: emoji, key: statusKey } }, { statusJidList: list })
-              .catch(() => sock.sendMessage('status@broadcast', { react: { text: emoji, key: m.key } }, { statusJidList: list }).catch(() => {}));
+            const list = [...new Set([poster, rawP, botJid, m.key.participant].filter(Boolean))];
+            sock.sendMessage(
+              'status@broadcast',
+              { react: { text: emoji, key: statusKey } },
+              { statusJidList: list }
+            ).catch(() => {
+              sock.sendMessage(
+                'status@broadcast',
+                { react: { text: emoji, key: m.key } },
+                { statusJidList: list }
+              ).catch(() => {});
+            });
           }
         }
         return;
