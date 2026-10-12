@@ -17,4 +17,21 @@ async function searchSong(query) {
   } catch { return null; }
 }
 
-module.exports = { searchSong };
+async function askAI(prompt) {
+  const text = String(prompt || '').trim();
+  if (!text) return null;
+  const endpoints = [
+    ['https://api.siputzx.my.id/api/ai/gpt', { content: text }],
+    ['https://api.siputzx.my.id/api/ai/chatgpt', { content: text }]
+  ];
+  for (const [url, body] of endpoints) {
+    try {
+      const r = await axios.post(url, body, { timeout: 45000, headers: { 'Content-Type': 'application/json' } });
+      const value = r.data?.data || r.data?.result || r.data?.message || r.data?.response || r.data?.answer;
+      if (typeof value === 'string' && value.trim()) return value.trim();
+    } catch {}
+  }
+  return null;
+}
+
+module.exports = { searchSong, askAI };

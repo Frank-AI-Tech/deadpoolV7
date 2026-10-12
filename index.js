@@ -670,7 +670,7 @@ function getOwnerJid() {
   return numbers.some(num => configured.some(owner => num === owner || num.endsWith(owner) || owner.endsWith(num)));
   }
 const isDeveloper = isOwner;
-const DEFAULT_STATUS_LIKES = ['❤️', '🔥', '😂', '👍', '😍', '💯', '🙏', '😮', '😢', '👏', '🎉', '✨', '💜', '🤍', '🖤', '💙', '💚', '💛', '🧡', '🤝'];
+const DEFAULT_STATUS_LIKES = ['❤️', '🔥', '😂', '👍', '😍', '💯', '🙏', '😮', '���', '👏', '🎉', '✨', '💜', '🤍', '🖤', '💙', '💚', '💛', '🧡', '🤝'];
 const DEFAULT_REACT_EMOJIS = ['👍', '❤️', '🔥', '😂', '🙏', '💯', '😍', '😮', '👏', '✨', '🎉', '💜', '🤝', '👀', '🫡', '🤩'];
 const DEFAULT_CMD_EMOJIS = ['✅', '⚡', '🔥', '💫', '✨', '🎯', '👍', '🤖', '💜', '🚀', '⭐', '💀', '👑'];
 function randEmoji(pool, fb) {
@@ -1185,7 +1185,18 @@ async function generateTextImage(effect, text) {
     try {
       const r = await dlGet(url, { responseType: 'arraybuffer', timeout: 40000 });
       if (r.status >= 400 || !r.data) continue;
-      const buf = Buffer.from(r.data);
+      let buf = Buffer.from(r.data);
+      // Text-effect APIs often return JSON containing the actual image URL.
+      const contentType = String(r.headers?.['content-type'] || '').toLowerCase();
+      if (contentType.includes('json') || buf[0] === 123) {
+        let payload;
+        try { payload = JSON.parse(buf.toString('utf8')); } catch { payload = null; }
+        const imageUrl = payload?.url || payload?.data?.url || payload?.result?.url || payload?.data?.image || payload?.result?.image;
+        if (!imageUrl) continue;
+        const image = await dlGet(imageUrl, { responseType: 'arraybuffer', timeout: 40000 });
+        if (image.status >= 400 || !image.data) continue;
+        buf = Buffer.from(image.data);
+      }
       // skip tiny / html error pages
       if (buf.length < 800) continue;
       const head = buf.slice(0, 20).toString('utf8').toLowerCase();
@@ -1211,7 +1222,7 @@ async function startBot() {
   console.log('║  Made by Confronter                  ║');
   console.log('║  We defeated the weak                ║');
   console.log('║  Confronter Techwizard               ║');
-  console.log('╚══════════════════════════════════════╝');
+  console.log('╚═��════════════════════════════════════╝');
   console.log(`👤 Owner : ${config.OWNER_NUMBER || '(not set — set OWNER_NUMBER in Heroku)'}`);
   console.log(`⚡ Prefix: ${config.PREFIX}`);
   console.log(`🌐 Mode  : ${config.MODE}`);

@@ -14,7 +14,7 @@ async function get(url, opts = {}) {
   });
 }
 async function fetchBuffer(url, t = 120000) {
-  const r = await get(url, { responseType: 'arraybuffer', timeout: t, extra: { maxContentLength: 150 * 1024 * 1024 } });
+  const r = await get(url, { responseType: 'arraybuffer', timeout: t, headers: { Referer: 'https://www.youtube.com/', Origin: 'https://www.youtube.com/' }, extra: { maxContentLength: 150 * 1024 * 1024 } });
   if (r.status >= 400) throw new Error('HTTP ' + r.status);
   return Buffer.from(r.data);
 }
@@ -34,6 +34,13 @@ const isYtUrl = q => /(?:youtube\.com\/(?:watch|shorts|embed)|youtu\.be\/)/i.tes
 
 // ============ SEARCH ============
 async function ytSearch(query) {
+  // Use the installed youtube-sr package first; yt-search is not guaranteed to be installed.
+  try {
+    const YouTube = require('youtube-sr').default || require('youtube-sr');
+    const results = await YouTube.search(String(query), { type: 'video', limit: 1 });
+    const v = results?.[0];
+    if (v?.url) return { url: v.url, title: v.title || query };
+  } catch {}
   // 1) siputzx
   try {
     const r = await get(`https://api.siputzx.my.id/api/yt/search?q=${e(query)}`);
@@ -60,6 +67,15 @@ async function ytSearch(query) {
 
 // ============ DOWNLOAD (resolve direct media URL) ============
 async function ytResolve(videoUrl, audio) {
+  // ytdl-core can resolve current YouTube formats without relying on unstable public APIs.
+  try {
+    const ytdl = require('@distube/ytdl-core');
+    const info = await ytdl.getInfo(videoUrl, { requestOptions: { headers: { 'User-Agent': UA } } });
+    const format = audio
+      ? ytdl.chooseFormat(info.formats, { quality: 'highestaudio', filter: 'audioonly' })
+      : (ytdl.chooseFormat(info.formats, { quality: '18' }) || ytdl.chooseFormat(info.formats, { quality: 'highestvideo' }));
+    if (format?.url) return format.url;
+  } catch {}
   const eps = audio
     ? [
         `https://api.siputzx.my.id/api/d/ytmp3?url=${e(videoUrl)}`,
