@@ -8,7 +8,7 @@
   },
   "engines": { "node": "22.x" },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.18",
+    "@whiskeysockets/baileys": "^6.7.22",
     "@hapi/boom": "^10.0.1",
     "@distube/ytdl-core": "^4.16.0",
     "youtube-sr": "^4.3.11",

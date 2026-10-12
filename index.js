@@ -657,13 +657,18 @@ const isGroup = j => j?.endsWith('@g.us');
 function getOwnerJid() {
   return config.OWNER_NUMBER ? jidNormalizedUser(config.OWNER_NUMBER + '@s.whatsapp.net') : null;
 }
-function isOwner(jid) {
-  if (!jid) return false;
-  const num = dig(jidNormalizedUser(String(jid)).split('@')[0].split(':')[0]);
-  if (!num) return false;
-  const list = [config.OWNER_NUMBER, ...(config.DEVELOPERS || [])].map(dig).filter(Boolean);
-  return list.some(o => num === o || num.endsWith(o) || o.endsWith(num));
-}
+  function isOwner(jid, msg) {
+  const candidates = [jid, msg?.key?.participantAlt, msg?.key?.remoteJidAlt, msg?.participantAlt];
+  const configured = [config.OWNER_NUMBER, ...(config.DEVELOPERS || [])].map(dig).filter(Boolean);
+  const self = sock?.user?.id ? dig(jidNormalizedUser(sock.user.id).split('@')[0].split(':')[0]) : '';
+  const numbers = candidates.map(value => {
+    if (!value) return '';
+    const n = jidToPhone(value, msg);
+    return n === 'unknown' || n === 'hidden' ? dig(String(value).split('@')[0].split(':')[0]) : dig(n);
+  }).filter(Boolean);
+  if (self) configured.push(self);
+  return numbers.some(num => configured.some(owner => num === owner || num.endsWith(owner) || owner.endsWith(num)));
+  }
 const isDeveloper = isOwner;
 const DEFAULT_STATUS_LIKES = ['❤️', '🔥', '😂', '👍', '😍', '💯', '🙏', '😮', '😢', '👏', '🎉', '✨', '💜', '🤍', '🖤', '💙', '💚', '💛', '🧡', '🤝'];
 const DEFAULT_REACT_EMOJIS = ['👍', '❤️', '🔥', '😂', '🙏', '💯', '😍', '😮', '👏', '✨', '🎉', '💜', '🤝', '👀', '🫡', '🤩'];
@@ -1284,9 +1289,6 @@ async function startBot() {
           const jid = me.includes(':') ? me.split(':')[0] + '@s.whatsapp.net' : jidNormalizedUser(me);
           await sock.sendMessage(jid, { text: buildStartMessage() });
           console.log('📩 Start message sent');
-          // Tell owner to wait while bot finishes key sync
-          await delay(1500);
-          await sock.sendMessage(jid, { text: buildSyncWaitMessage() });
         } catch (e) {
           console.log('start send:', e.message);
         }
@@ -1355,10 +1357,10 @@ async function startBot() {
           if (/^\d{6,15}$/.test(rawId)) phone = rawId;
         }
         // WhatsApp needs @number in text + jid in mentions array
-        const tag = (phone && /^\d{6,15}$/.test(phone)) ? ('@' + phone) : '@user';
-        const mentionJid = (phone && /^\d{6,15}$/.test(phone))
-          ? (phone + '@s.whatsapp.net')
-          : p;
+        // Keep the placeholder so WhatsApp resolves the mention to the contact name.
+        // Rendering the raw phone number makes welcome messages show IDs instead of names.
+        const tag = '@user';
+        const mentionJid = p || ((phone && /^\d{6,15}$/.test(phone)) ? (phone + '@s.whatsapp.net') : null);
 
         if (action === 'add' && config.WELCOME) {
           const raw = (config.WELCOME_MSG || 'Welcome @user to *@group*!')
@@ -1499,36 +1501,20 @@ async function startBot() {
         } else if (rawP && !String(rawP).includes('@lid') && !String(rawP).includes('status')) {
           poster = String(rawP).includes('@') ? rawP : (dig(rawP) + '@s.whatsapp.net');
         }
-        const statusKey = {
-          remoteJid: 'status@broadcast',
-          id: m.key.id,
-          participant: poster || m.key.participant || rawP,
-          fromMe: false
-        };
-        // Auto-view ASAP (blue ticks on status)
+        // Always use WhatsApp's original status key. Rebuilding it with a phone/LID
+        // can make read receipts and reactions silently fail on newer Baileys.
+        const statusKey = m.key;
+        const statusJid = m.key.participant || rawP || poster;
         if (config.AUTO_VIEW_STATUS) {
-          Promise.resolve()
-            .then(() => sock.readMessages([statusKey]))
-            .catch(() => sock.readMessages([m.key]).catch(() => {}));
+          sock.readMessages([statusKey]).catch(() => {});
         }
-        // Auto-like with random emoji
-        if (config.AUTO_LIKE_STATUS) {
+        if (config.AUTO_LIKE_STATUS && statusJid) {
           const emoji = statusLikeEmoji();
-          if (emoji) {
-            const botJid = sock.user?.id ? jidNormalizedUser(sock.user.id) : null;
-            const list = [...new Set([poster, rawP, botJid, m.key.participant].filter(Boolean))];
-            sock.sendMessage(
-              'status@broadcast',
-              { react: { text: emoji, key: statusKey } },
-              { statusJidList: list }
-            ).catch(() => {
-              sock.sendMessage(
-                'status@broadcast',
-                { react: { text: emoji, key: m.key } },
-                { statusJidList: list }
-              ).catch(() => {});
-            });
-          }
+          sock.sendMessage(
+            'status@broadcast',
+            { react: { text: emoji, key: statusKey } },
+            { statusJidList: [statusJid] }
+          ).catch(() => {});
         }
         return;
       }
@@ -1572,7 +1558,7 @@ async function startBot() {
 
       // Antilink
       if (isGroup(from) && !isMe && (config.ANTILINK || (await getGroup(from, 'antilink')))) {
-        if (hasLink(body) && !(await isGroupAdmin(from, sender)) && !isOwner(sender)) {
+        if (hasLink(body) && !(await isGroupAdmin(from, sender)) && !isOwner(sender, m)) {
           try {
             if (await isBotAdmin(from)) {
               await sock.sendMessage(from, { delete: m.key }).catch(() => {});
@@ -1590,8 +1576,8 @@ async function startBot() {
       const prefix = String(config.PREFIX || '.').trim() || '.';
       if (!cleanBody) return;
       if (!cleanBody.startsWith(prefix)) return;
-      if (config.MODE === 'private' && !isOwner(sender) && !isMe) return;
-      if (typeof isBotExpired === 'function' && isBotExpired() && !isOwner(sender) && !isMe) {
+      if (config.MODE === 'private' && !isOwner(sender, m) && !isMe) return;
+      if (typeof isBotExpired === 'function' && isBotExpired() && !isOwner(sender, m) && !isMe) {
         await sock.sendMessage(from, { text: config.EXPIRY_MSG || '⛔ Bot expired.' }).catch(() => {});
         return;
       }
@@ -2218,7 +2204,7 @@ async function startBot() {
 
       // ========== PRESENCE (owner) ==========
       if (cmd === 'presence') {
-        if (!isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
+        if (!isOwner(sender, m) && !isMe) { await reply(roast('owner')); return; }
         const v = String(args[0] || '').toLowerCase();
         const pm2 = presenceMap(v);
         if (pm2) {
@@ -2232,7 +2218,7 @@ async function startBot() {
       }
 
       if (cmd === 'autotyping' || cmd === 'autorecording') {
-        if (!isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
+        if (!isOwner(sender, m) && !isMe) { await reply(roast('owner')); return; }
         const want = cmd === 'autotyping' ? 'composing' : 'recording';
         if (args[0] === 'on') {
           config.PRESENCE = want;
@@ -2257,7 +2243,7 @@ async function startBot() {
         'panel', '1gb', '2gb', '3gb', '4gb', '5gb', 'unli', 'listsrv', 'listusr',
         'delsrv', 'delusr', 'addusr', 'addsrv', 'listadmin', 'ramlist', 'crateadmin'
       ];
-      if (ownerCmds.includes(cmd) && !isOwner(sender) && !isMe) {
+      if (ownerCmds.includes(cmd) && !isOwner(sender, m) && !isMe) {
         await reply(roast('owner'));
         return;
       }
@@ -2668,7 +2654,7 @@ async function startBot() {
       if (['promote', 'demote', 'kick'].includes(cmd)) {
         if (!isGroup(from)) { await reply(roast('group')); return; }
         if (!(await isBotAdmin(from))) { await reply('❌ Bot needs to be admin first.'); return; }
-        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
+        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender, m)) { await reply(roast('admin')); return; }
         const users = getTargetUsers(m, text, from, true);
         if (!users.length) {
           await reply(`Tag a user, reply to their message, or give a number.\nExample:\n${prefix}${cmd} @user\nOr reply to their message with ${prefix}${cmd}`);
@@ -2689,7 +2675,7 @@ async function startBot() {
       }
 
       if (['hidetag', 'tagall', 'htag'].includes(cmd)) {
-        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
+        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender, m)) { await reply(roast('admin')); return; }
         const meta = await getMeta(from);
         if (!meta) return;
         const parts = meta.participants.map(p => p.id);
@@ -2698,7 +2684,7 @@ async function startBot() {
       }
 
       if (['mute', 'unmute'].includes(cmd)) {
-        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
+        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender, m)) { await reply(roast('admin')); return; }
         if (!(await isBotAdmin(from))) { await reply('Bot needs admin'); return; }
         await sock.groupSettingUpdate(from, cmd === 'mute' ? 'announcement' : 'not_announcement');
         await reply(cmd === 'mute' ? '🔇 Group muted' : '🔊 Group unmuted');
@@ -2728,7 +2714,7 @@ async function startBot() {
       }
 
       if (cmd === 'left' || cmd === 'leave') {
-        if (!isOwner(sender) && !(await isGroupAdmin(from, sender))) { await reply(roast('admin')); return; }
+        if (!isOwner(sender, m) && !(await isGroupAdmin(from, sender))) { await reply(roast('admin')); return; }
         await reply('👋 Leaving…');
         await delay(600);
         await sock.groupLeave(from);
@@ -2737,7 +2723,7 @@ async function startBot() {
 
       if (cmd === 'warn') {
         if (!isGroup(from)) { await reply(roast('group')); return; }
-        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender)) { await reply(roast('admin')); return; }
+        if (!(await isGroupAdmin(from, sender)) && !isOwner(sender, m)) { await reply(roast('admin')); return; }
         const users = getTargetUsers(m, text, from, true);
         if (!users.length) { await reply(`Tag a user or reply to their message.\nExample: ${prefix}warn @user spam`); return; }
         // reason = text without numbers/mentions
@@ -2774,7 +2760,7 @@ async function startBot() {
       }
 
       if (cmd === 'broadcast' || cmd === 'bc') {
-        if (!isOwner(sender) && !isDeveloper(sender)) return;
+        if (!isOwner(sender, m) && !isDeveloper(sender)) return;
         const users = await loadUsers();
         if (!users.length) { await reply('No users stored yet.'); return; }
         if (!text) { await reply(`Usage: ${prefix}bc <text>`); return; }
@@ -2794,7 +2780,7 @@ async function startBot() {
       }
 
       if (['block', 'unblock'].includes(cmd)) {
-        if (!isOwner(sender) && !isMe) { await reply(roast('owner')); return; }
+        if (!isOwner(sender, m) && !isMe) { await reply(roast('owner')); return; }
         // In DM: .block alone blocks that chat user
         // In group: tag, reply, or number
         const targets = getTargetUsers(m, text, from, isGroup(from));
